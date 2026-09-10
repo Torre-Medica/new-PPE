@@ -1,0 +1,700 @@
+{
+  "info": {
+    "_postman_id": "1f3fb50b-4a40-4ee0-8f78-73f7bda1b534",
+    "name": "PPE Local API",
+    "description": "Coleccion Postman para el backend local del PPE. Usa x-api-key y variables para alternar entre admin, operator y audit.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3100/api"
+    },
+    {
+      "key": "apiKey",
+      "value": "{{adminApiKey}}"
+    },
+    {
+      "key": "adminApiKey",
+      "value": "ppe-admin-local"
+    },
+    {
+      "key": "operatorApiKey",
+      "value": "ppe-operator-local"
+    },
+    {
+      "key": "auditApiKey",
+      "value": "ppe-audit-local"
+    },
+    {
+      "key": "paymentSessionId",
+      "value": "replace-session-id"
+    },
+    {
+      "key": "qrCode",
+      "value": "qr-live-001"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Liveness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health/live",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health",
+                "live"
+              ]
+            },
+            "description": "Endpoint publico de liveness."
+          }
+        },
+        {
+          "name": "Readiness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health/ready",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health",
+                "ready"
+              ]
+            },
+            "description": "Endpoint publico de readiness."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Devices",
+      "item": [
+        {
+          "name": "List Devices",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/devices",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices"
+              ]
+            },
+            "description": "Lista dispositivos. Roles: Admin, Operator, Audit."
+          }
+        },
+        {
+          "name": "Connect Device",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"BILL_VALIDATOR\",\n  \"port\": \"COM3\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/devices/connect",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "connect"
+              ]
+            },
+            "description": "Conecta un dispositivo individual. Roles: Admin, Operator."
+          }
+        },
+        {
+          "name": "Connect All",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/devices/connect-all",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "connect-all"
+              ]
+            },
+            "description": "Conecta todos los perifericos. Roles: Admin, Operator."
+          }
+        },
+        {
+          "name": "Disconnect All",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/devices/disconnect-all",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "disconnect-all"
+              ]
+            },
+            "description": "Desconecta todos los perifericos. Roles: Admin, Operator."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cash",
+      "item": [
+        {
+          "name": "Get Inventory",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/cash/inventory",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cash",
+                "inventory"
+              ]
+            },
+            "description": "Consulta inventario de efectivo. Roles: Admin, Operator, Audit."
+          }
+        },
+        {
+          "name": "Get Movements",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/cash/movements",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cash",
+                "movements"
+              ]
+            },
+            "description": "Consulta ultimos movimientos. Roles: Admin, Operator, Audit."
+          }
+        },
+        {
+          "name": "Load Cash",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"denominationId\": 1000,\n  \"quantity\": 10,\n  \"reason\": \"Carga inicial de caja\",\n  \"createdBy\": \"postman-admin\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/cash/load",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cash",
+                "load"
+              ]
+            },
+            "description": "Recarga caja. Roles: Admin, Operator."
+          }
+        },
+        {
+          "name": "Unload Cash",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"denominationId\": 500,\n  \"quantity\": 4,\n  \"reason\": \"Retiro parcial\",\n  \"createdBy\": \"postman-admin\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/cash/unload",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cash",
+                "unload"
+              ]
+            },
+            "description": "Descarga caja. Roles: Admin, Operator."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Payments",
+      "item": [
+        {
+          "name": "Start Session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"targetAmount\": 7000,\n  \"qrCode\": \"{{qrCode}}\",\n  \"vehiclePlate\": \"ABC123\",\n  \"vehicleType\": \"CAR\",\n  \"identificationType\": \"CC\",\n  \"identificationCode\": \"123456789\",\n  \"concept\": \"Pago parqueadero\",\n  \"serverProcessId\": 101,\n  \"metadataJson\": \"{\\\"source\\\":\\\"postman\\\"}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/payments/start",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "start"
+              ]
+            },
+            "description": "Inicia una sesion de pago. Roles: Admin, Operator."
+          }
+        },
+        {
+          "name": "Cancel Session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/cancel/{{paymentSessionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "cancel",
+                "{{paymentSessionId}}"
+              ]
+            },
+            "description": "Cancela una sesion activa. Roles: Admin, Operator."
+          }
+        },
+        {
+          "name": "Register Cash",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"denominationId\": 2000,\n  \"quantity\": 2,\n  \"createdBy\": \"postman-operator\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/payments/{{paymentSessionId}}/cash",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "{{paymentSessionId}}",
+                "cash"
+              ]
+            },
+            "description": "Registra efectivo manualmente para una sesion. Roles: Admin, Operator."
+          }
+        },
+        {
+          "name": "Complete Session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"committedBy\": \"postman-operator\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/payments/{{paymentSessionId}}/complete",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "{{paymentSessionId}}",
+                "complete"
+              ]
+            },
+            "description": "Completa una sesion y dispara sync al servidor. Roles: Admin, Operator."
+          }
+        },
+        {
+          "name": "Retry Pending Sync",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"limit\": 20\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/payments/sync/retry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "sync",
+                "retry"
+              ]
+            },
+            "description": "Reintenta pagos pendientes de sincronizar. Roles: Admin, Operator."
+          }
+        },
+        {
+          "name": "Search Completed Payments",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/completed/search?qrCode={{qrCode}}&dateFrom=2026-05-01T00:00:00.000Z&dateTo=2026-05-31T23:59:59.999Z",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "completed",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "qrCode",
+                  "value": "{{qrCode}}"
+                },
+                {
+                  "key": "dateFrom",
+                  "value": "2026-05-01T00:00:00.000Z"
+                },
+                {
+                  "key": "dateTo",
+                  "value": "2026-05-31T23:59:59.999Z"
+                }
+              ]
+            },
+            "description": "Busca pagos completados. Roles: Admin, Operator, Audit."
+          }
+        },
+        {
+          "name": "Get Completed By QR",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/completed/by-qr/{{qrCode}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "completed",
+                "by-qr",
+                "{{qrCode}}"
+              ]
+            },
+            "description": "Consulta ultimo pago completado por QR. Roles: Admin, Operator, Audit."
+          }
+        },
+        {
+          "name": "Get Session Events",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/{{paymentSessionId}}/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "{{paymentSessionId}}",
+                "events"
+              ]
+            },
+            "description": "Consulta eventos de una sesion. Roles: Admin, Operator, Audit."
+          }
+        },
+        {
+          "name": "Get Session By ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/{{paymentSessionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "{{paymentSessionId}}"
+              ]
+            },
+            "description": "Consulta detalle de sesion. Roles: Admin, Operator, Audit."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Audit",
+      "item": [
+        {
+          "name": "Payment Events",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/audit/payment-events?paymentSessionId={{paymentSessionId}}&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "audit",
+                "payment-events"
+              ],
+              "query": [
+                {
+                  "key": "paymentSessionId",
+                  "value": "{{paymentSessionId}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            },
+            "description": "Consulta eventos recientes de pago. Roles: Admin, Audit."
+          }
+        },
+        {
+          "name": "Device Health",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/audit/device-health?deviceCode=BILL_VALIDATOR&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "audit",
+                "device-health"
+              ],
+              "query": [
+                {
+                  "key": "deviceCode",
+                  "value": "BILL_VALIDATOR"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            },
+            "description": "Consulta logs de salud de dispositivos. Roles: Admin, Audit."
+          }
+        },
+        {
+          "name": "Server Sync Attempts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/audit/server-sync-attempts?requestType=COMMIT&status=FAILED&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "audit",
+                "server-sync-attempts"
+              ],
+              "query": [
+                {
+                  "key": "requestType",
+                  "value": "COMMIT"
+                },
+                {
+                  "key": "status",
+                  "value": "FAILED"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            },
+            "description": "Consulta intentos de sincronizacion con servidor. Roles: Admin, Audit."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Server Link",
+      "item": [
+        {
+          "name": "Connection Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/server-link/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "server-link",
+                "status"
+              ]
+            },
+            "description": "Estado de conexion con nexo_back. Roles: Admin, Operator, Audit."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+import { EventEmitter } from "typed-event-emitter";
+export declare class BillValidator extends EventEmitter {
+    private static RESET_COMMAND;
+    private static SETUP_COMMAND;
+    private static SECURITY_COMMAND;
+    private static POLL_COMMAND;
+    private static BILL_COMMAND;
+    private static ESCROW_COMMAND;
+    private static STACKER_COMMAND;
+    private static EXPANSION_COMMAND;
+    readonly onBillReceived: (handler: (args_0: String) => void) => import("typed-event-emitter").Listener;
+    readonly onBillPending: (handler: (args_0: String) => void) => import("typed-event-emitter").Listener;
+    readonly onBillReturned: (handler: (args_0: String) => void) => import("typed-event-emitter").Listener;
+    readonly onData: (handler: (args_0: String) => void) => import("typed-event-emitter").Listener;
+    readonly onError: (handler: (args_0: String) => void) => import("typed-event-emitter").Listener;
+    private port;
+    constructor();
+    connect(port: string): Promise<Boolean>;
+    disconnect(): Boolean;
+    private resetCommand;
+    private setupCommand;
+    private securityCommand;
+    private pollCommand;
+    private billCommand;
+    private escrowCommand;
+    private stackerCommand;
+    reset(): void;
+    activate(): void;
+    deactivate(): void;
+}
+declare const _default: BillValidator;
+export default _default;

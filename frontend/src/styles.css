@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@keyframes cancelNoticeProgress {
+  from { width: 100%; }
+  to { width: 0%; }
+}
+
+.cancel-notice-bar {
+  animation: cancelNoticeProgress 5s linear forwards;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    @apply h-full overflow-hidden;
+  }
+
+  body {
+    @apply m-0 font-display text-ink antialiased;
+    background-color: #1a2a4a;
+    background-image: url('/PARKING-PAYMENT-BG.png');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+  }
+
+  button {
+    @apply cursor-pointer;
+  }
+}
+
+@layer components {
+  .screen-shell {
+    @apply relative h-screen overflow-hidden px-4 py-4;
+  }
+
+  .screen-center {
+    @apply grid h-screen content-center justify-items-center overflow-hidden px-4 py-4;
+  }
+
+  .glass-panel {
+    @apply w-full rounded-4xl border border-white/20 p-4 shadow-kiosk backdrop-blur-xl;
+    background-color: rgba(255, 255, 255, 0.82);
+    background: linear-gradient(rgba(10, 20, 50, 0.08), rgba(10, 20, 50, 0.08)),
+                url('/PARKING-PAYMENT-BG.png') center / cover no-repeat;
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
+  }
+
+  .glass-panel-fill {
+    @apply w-full rounded-4xl border border-white/20 p-4 shadow-kiosk backdrop-blur-xl;
+    background-color: rgba(255, 255, 255, 0.82);
+    background: linear-gradient(rgba(10, 20, 50, 0.08), rgba(10, 20, 50, 0.08)),
+                url('/PARKING-PAYMENT-BG.png') center / cover no-repeat;
+    @apply flex flex-col overflow-hidden;
+  }
+
+  .touch-button {
+    @apply inline-flex min-h-[3rem] items-center justify-center rounded-3xl px-5 text-base font-semibold transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .touch-button-primary {
+    @apply touch-button bg-brand-500 text-white shadow-md hover:bg-brand-600 active:bg-brand-700;
+  }
+
+  .touch-button-secondary {
+    @apply touch-button border-2 border-brand-500 bg-white/80 text-brand-700 hover:bg-brand-50;
+  }
+
+  .metric-box {
+    @apply rounded-3xl border border-black/10 bg-white/80 p-3;
+  }
+
+  .touch-input {
+    @apply min-h-[3rem] w-full rounded-3xl border-2 border-black/10 bg-white/90 px-4 text-base text-ink outline-none transition focus:border-brand-500 focus:ring-4 focus:ring-brand-100/60;
+  }
+}
