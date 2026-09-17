@@ -10,6 +10,7 @@ import {
   MonthlySubscriptionServiceSummary,
   ValidateMonthlySubscriptionDto,
 } from '@modules/server-link/application/dto/monthly-subscription.dto';
+import { CompanyInfoSummary } from '@modules/server-link/application/dto/company-info.dto';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -17,6 +18,7 @@ type JsonRecord = Record<string, unknown>;
 export class NexoBackRestService {
   private token: string | null = null;
   private cashPaymentTypeId: number | null = null;
+  private companyInfo: CompanyInfoSummary | null = null;
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -273,6 +275,28 @@ export class NexoBackRestService {
         payDay: false,
       },
     });
+  }
+
+  async getCompanyInfo(): Promise<CompanyInfoSummary> {
+    if (this.companyInfo) {
+      return this.companyInfo;
+    }
+
+    const response = this.asRecord(
+      await this.requestJson<unknown>('/common', { auth: true }),
+    );
+    const informationCompany = this.asRecord(response.informationCompany);
+
+    const info: CompanyInfoSummary = {
+      name:
+        this.readString(informationCompany.commercialName) ??
+        this.readString(informationCompany.businessName) ??
+        'Empresa no configurada',
+      address: this.readString(informationCompany.address) ?? '',
+    };
+
+    this.companyInfo = info;
+    return info;
   }
 
   private async resolveCashPaymentTypeId(): Promise<number> {

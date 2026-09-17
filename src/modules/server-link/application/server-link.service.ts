@@ -118,6 +118,10 @@ export class ServerLinkService implements OnModuleInit, OnModuleDestroy, ServerL
     return this.emitWithAck('ppe.payment.cancel', dto);
   }
 
+  getCompanyInfo() {
+    return this.nexoBackRestService.getCompanyInfo();
+  }
+
   prepareMonthlySubscription(identificationCode: string) {
     return this.nexoBackRestService.prepareMonthlySubscription(identificationCode);
   }

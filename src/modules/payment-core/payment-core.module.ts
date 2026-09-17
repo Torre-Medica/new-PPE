@@ -15,7 +15,7 @@ import { ServerLinkModule } from '@modules/server-link/server-link.module';
 
 @Module({
   imports: [
-    CashManagementModule,
+    forwardRef(() => CashManagementModule),
     forwardRef(() => KioskModule),
     PeripheralsModule,
     forwardRef(() => ServerLinkModule),

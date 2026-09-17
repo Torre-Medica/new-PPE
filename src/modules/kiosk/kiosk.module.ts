@@ -8,7 +8,11 @@ import { PrintingModule } from '@modules/printing/printing.module';
 import { KioskStateEntity } from '@modules/persistence/infrastructure/entities/kiosk-state.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([KioskStateEntity]), forwardRef(() => PaymentCoreModule), PrintingModule],
+  imports: [
+    TypeOrmModule.forFeature([KioskStateEntity]),
+    forwardRef(() => PaymentCoreModule),
+    forwardRef(() => PrintingModule),
+  ],
   controllers: [KioskController],
   providers: [KioskEventsService, KioskStateService],
   exports: [KioskEventsService, KioskStateService],

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -9,6 +9,9 @@ import {
   PaymentSessionEntity,
   PaymentSessionStatus,
 } from '@modules/persistence/infrastructure/entities/payment-session.entity';
+import { SERVER_LINK_PORT } from '@modules/server-link/domain/ports/server-link.port';
+import type { ServerLinkPort } from '@modules/server-link/domain/ports/server-link.port';
+import type { CompanyInfoSummary } from '@modules/server-link/application/dto/company-info.dto';
 
 type PrinterConfigRecord = {
   JAVA_SERVER_URL: string;
@@ -67,6 +70,14 @@ type PaymentReceiptMetadata = {
     exitUntil?: string | null;
     serverPaymentId?: number | null;
   };
+  monthlySubscription?: {
+    validated?: boolean;
+    validationDetail?: {
+      requestedMonthlySubscriptionStartDatetime?: string | null;
+      requestedMonthlySubscriptionEndDatetime?: string | null;
+      [key: string]: unknown;
+    } | null;
+  };
 };
 
 const TICKET_WIDTH = 42;
@@ -79,13 +90,31 @@ export class PrintingService {
   private readonly configDir = join(process.cwd(), 'config_files');
   private readonly configFile = join(this.configDir, 'printerConfig.txt');
 
+  private static readonly FALLBACK_COMPANY_NAME =
+    'CORPORACION UNIVERSITARIA MINUTO DE DIOS';
+  private static readonly FALLBACK_COMPANY_ADDRESS =
+    'Seccional Bello - Sede Antioquia-Choco\nCarrera 45 # 22D - 25\nBello, Colombia';
+
   constructor(
     @InjectRepository(PaymentSessionEntity)
     private readonly paymentSessionRepository: Repository<PaymentSessionEntity>,
     @InjectRepository(CashCloseoutEntity)
     private readonly cashCloseoutRepository: Repository<CashCloseoutEntity>,
     private readonly configService: ConfigService,
+    @Inject(SERVER_LINK_PORT)
+    private readonly serverLink: ServerLinkPort,
   ) {}
+
+  private async getCompanyInfoSafe(): Promise<CompanyInfoSummary> {
+    try {
+      return await this.serverLink.getCompanyInfo();
+    } catch {
+      return {
+        name: PrintingService.FALLBACK_COMPANY_NAME,
+        address: PrintingService.FALLBACK_COMPANY_ADDRESS,
+      };
+    }
+  }
 
   async printPaymentReceipt(paymentSessionId: string) {
     const session = await this.paymentSessionRepository.findOne({
@@ -124,19 +153,46 @@ export class PrintingService {
       session.concept ??
       metadata?.validation?.concept ??
       'No registrada';
+    const monthlySubscriptionStartAt =
+      metadata?.monthlySubscription?.validationDetail?.requestedMonthlySubscriptionStartDatetime ??
+      null;
+    const monthlySubscriptionEndAt =
+      metadata?.monthlySubscription?.validationDetail?.requestedMonthlySubscriptionEndDatetime ??
+      null;
+    const isMonthlySubscriptionReceipt = Boolean(
+      monthlySubscriptionStartAt && monthlySubscriptionEndAt,
+    );
+    const companyInfo = await this.getCompanyInfoSafe();
     const operations: PrinterOperation[] = [
       { accion: 'textalign', datos: 'center' },
-      { accion: 'text', datos: 'CORPORACION UNIVERSITARIA MINUTO DE DIOS' },
-      { accion: 'text', datos: 'Seccional Bello - Sede Antioquia-Choco' },
-      { accion: 'text', datos: 'Carrera 45 # 22D - 25' },
-      { accion: 'text', datos: 'Bello, Colombia' },
+      { accion: 'text', datos: companyInfo.name },
+      { accion: 'text', datos: companyInfo.address },
       { accion: 'feed', datos: '1' },
       { accion: 'textalign', datos: 'left' },
       { accion: 'text', datos: `Fecha de impresion: ${this.formatDate(new Date())}` },
       { accion: 'text', datos: 'Forma de pago: Contado' },
       { accion: 'text', datos: 'Metodo de pago: Efectivo' },
-      { accion: 'text', datos: `Fecha de ingreso: ${this.formatDateValue(startedAt)}` },
-      { accion: 'text', datos: `Salida estimada: ${this.formatDateValue(estimatedExitAt)}` },
+      ...(isMonthlySubscriptionReceipt
+        ? [
+            {
+              accion: 'text' as const,
+              datos: `Inicio mensualidad: ${this.formatDateValue(monthlySubscriptionStartAt)}`,
+            },
+            {
+              accion: 'text' as const,
+              datos: `Fin mensualidad: ${this.formatDateValue(monthlySubscriptionEndAt)}`,
+            },
+          ]
+        : [
+            {
+              accion: 'text' as const,
+              datos: `Fecha de ingreso: ${this.formatDateValue(startedAt)}`,
+            },
+            {
+              accion: 'text' as const,
+              datos: `Salida estimada: ${this.formatDateValue(estimatedExitAt)}`,
+            },
+          ]),
       { accion: 'text', datos: this.separator() },
       { accion: 'text', datos: 'Cantidad total:' },
       { accion: 'text', datos: this.composeColumns('', 'Total', `$ ${session.targetAmount.toLocaleString('es-CO')}`) },

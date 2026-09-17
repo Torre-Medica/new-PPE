@@ -7,11 +7,13 @@ import {
   ValidateMonthlySubscriptionDto,
 } from '@modules/server-link/application/dto/monthly-subscription.dto';
 import { ValidatePaymentDto } from '@modules/server-link/application/dto/validate-payment.dto';
+import { CompanyInfoSummary } from '@modules/server-link/application/dto/company-info.dto';
 
 export const SERVER_LINK_PORT = Symbol('ServerLinkPort');
 
 export interface ServerLinkPort {
   validatePaymentCandidate(dto: ValidatePaymentDto): Promise<unknown>;
+  getCompanyInfo(): Promise<CompanyInfoSummary>;
   commitPayment(dto: CommitPaymentDto): Promise<unknown>;
   cancelPayment(dto: CancelPaymentDto): Promise<unknown>;
   prepareMonthlySubscription(identificationCode: string): Promise<MonthlySubscriptionPreparation>;
