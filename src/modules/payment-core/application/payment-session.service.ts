@@ -881,8 +881,6 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       );
     }
 
-    await this.assertAcceptedCashDenomination(session, dto.denominationId);
-
     const totalAdded = dto.denominationId * dto.quantity;
 
     await this.dataSource.transaction(async (manager) => {
