@@ -84,6 +84,14 @@ export interface KioskStateSummary {
     electronicBillingEnabled?: boolean;
     monthlySubscriptionsEnabled?: boolean;
   };
+  timeouts?: {
+    validatingMs?: number;
+    reviewMs?: number;
+    cashMs?: number;
+    billingDetailsMs?: number;
+    monthlySubscriptionMs?: number;
+    finalizingMs?: number;
+  };
 }
 
 export interface ElectronicBillingIdentificationType {

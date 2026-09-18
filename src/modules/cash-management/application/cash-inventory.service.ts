@@ -42,8 +42,7 @@ type CloseoutReceiptSection = {
 @Injectable()
 export class CashInventoryService {
   private static readonly KIOSK_STATE_SINGLETON_ID = 1;
-  // 50000 y 100000 excluidos: la maquina no debe aceptar esos billetes
-  private static readonly BILL_DENOMINATIONS = [1000, 2000, 5000, 10000, 20000];
+  private static readonly BILL_DENOMINATIONS = [1000, 2000, 5000, 10000, 20000, 50000, 100000];
 
   /**
    * Serializa la creacion de cierres de caja en este proceso. Sin esto, dos

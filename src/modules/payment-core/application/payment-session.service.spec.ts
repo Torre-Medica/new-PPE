@@ -1247,9 +1247,16 @@ describe('PaymentSessionService', () => {
     expect(dataSource.transaction).not.toHaveBeenCalled();
   });
 
-  it('blocks payments and records a novedad when a $50.000 bill is reported by the hardware', async () => {
-    const { service, paymentSessionRepository, cashInventoryService, kioskStateService, kioskEventsService, peripheralsService } =
-      createService();
+  it('accepts a $50.000 bill as regular cash when the acceptance policy allows it', async () => {
+    const {
+      service,
+      paymentSessionRepository,
+      cashInventoryService,
+      kioskStateService,
+      kioskEventsService,
+      peripheralsService,
+      dataSource,
+    } = createService();
 
     let moneyHandler: ((event: { source: string; amount: number }) => void) | undefined;
     peripheralsService.onMoneyReceived.mockImplementation(
@@ -1267,26 +1274,44 @@ describe('PaymentSessionService', () => {
         insertedAmount: 0,
       }),
     );
-    // acceptedBillDenominations por defecto no incluye 50000/100000
+    cashInventoryService.getAcceptancePolicy.mockResolvedValue({
+      pendingAmount: 60000,
+      acceptedBillDenominations: [1000, 2000, 5000, 10000, 20000, 50000, 100000],
+      maxAcceptedBill: 100000,
+      message: '',
+      dispensableDenominations: [20000, 10000],
+    });
+    dataSource.transaction.mockImplementation(
+      async (cb: (m: Record<string, unknown>) => Promise<void>) => {
+        const manager = {
+          findOneByOrFail: jest.fn().mockResolvedValue(
+            makeSession({
+              id: 'session-1',
+              status: PaymentSessionStatus.ListeningCash,
+              targetAmount: 60000,
+              insertedAmount: 0,
+            }),
+          ),
+          findOne: jest.fn().mockResolvedValue(null),
+          save: jest.fn().mockImplementation(async (_cls: unknown, entity: unknown) => entity),
+          create: jest.fn((_cls: unknown, value: unknown) => value),
+        };
+        await cb(manager);
+      },
+    );
 
     moneyHandler!({ source: 'BILL_VALIDATOR', amount: 50000 });
     await new Promise((resolve) => setImmediate(resolve));
 
-    expect(cashInventoryService.recordCashIncident).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'REJECTED_LARGE_BILL',
-        amount: 50000,
-        paymentSessionId: 'session-1',
-      }),
+    expect(cashInventoryService.recordAcceptedCashWithManager).toHaveBeenCalledWith(
+      expect.objectContaining({ denominationId: 50000, quantity: 1 }),
+      expect.anything(),
     );
-    expect(kioskStateService.setPaymentsBlocked).toHaveBeenCalledWith(
-      true,
-      'system',
-      expect.stringContaining('50.000'),
-    );
-    expect(kioskEventsService.emit).toHaveBeenCalledWith(
+    expect(cashInventoryService.recordCashIncident).not.toHaveBeenCalled();
+    expect(kioskStateService.setPaymentsBlocked).not.toHaveBeenCalled();
+    expect(kioskEventsService.emit).not.toHaveBeenCalledWith(
       'machine.large-bill-blocked',
-      expect.objectContaining({ amount: 50000, paymentSessionId: 'session-1' }),
+      expect.anything(),
     );
   });
 

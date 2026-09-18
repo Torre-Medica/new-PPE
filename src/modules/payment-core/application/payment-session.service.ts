@@ -1615,40 +1615,6 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
         amount: event.amount,
         reason: message,
       });
-
-      if (event.amount === 50000 || event.amount === 100000) {
-        // El billete de $50.000/$100.000 nunca debe contarse como dinero recibido
-        // (ya no se llego a llamar registerCash con exito). Bloquear la maquina es
-        // lo critico para la seguridad del efectivo, asi que va primero y sin
-        // depender de que el registro de la novedad (best-effort, ver abajo) tenga
-        // exito — un fallo ahi jamas debe dejar la maquina aceptando dinero.
-        this.peripheralsService.deactivateAcceptance();
-        await this.kioskStateService.setPaymentsBlocked(
-          true,
-          'system',
-          `Billete de $${event.amount.toLocaleString('es-CO')} no aceptado — requiere devolucion manual por un operador`,
-        );
-        this.kioskEventsService.emit('machine.large-bill-blocked', {
-          paymentSessionId: activeSession.id,
-          amount: event.amount,
-          reason: 'Billete no aceptado por la maquina — contacte al operador para su devolucion',
-        });
-
-        try {
-          await this.cashInventoryService.recordCashIncident({
-            type: CashIncidentType.RejectedLargeBill,
-            amount: event.amount,
-            denominationId: event.amount,
-            paymentSessionId: activeSession.id,
-            createdBy: 'system',
-          });
-        } catch (incidentError) {
-          this.logger.error(
-            `No se pudo registrar la novedad de billete rechazado ($${event.amount}) para sesion ${activeSession.id}: ` +
-            `${incidentError instanceof Error ? incidentError.message : String(incidentError)}`,
-          );
-        }
-      }
     }
   }
 

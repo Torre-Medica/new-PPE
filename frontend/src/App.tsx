@@ -76,13 +76,17 @@ const SLOT_LABELS: Record<string, string> = {
   coin2: 'Monedero #2',
 };
 
-const FIXED_PAYMENT_WARNINGS = [
-
-  'La maquina no recibe billetes de $50.000 ni de $100.000.',
-];
-const REVIEW_TIMEOUT_SECONDS = 30;
-const BILLING_DETAILS_TIMEOUT_SECONDS = 5 * 60;
-const MONTHLY_SUBSCRIPTION_TIMEOUT_SECONDS = 2 * 60;
+const FIXED_PAYMENT_WARNINGS: string[] = [];
+// Valores por defecto si el backend no responde con .timeouts (ej. version
+// vieja) - en operacion normal, todo tiempo de espera lo controla el .env
+// del PPE (ver PAYMENT_SESSION_*_TIMEOUT_MS) y llega via GET /kiosk/state.
+const DEFAULT_SESSION_TIMEOUTS_SECONDS = {
+  review: 30,
+  cash: 30,
+  billingDetails: 5 * 60,
+  monthlySubscription: 2 * 60,
+  finalizing: 30,
+};
 const VALLE_ABURRA_CITY_ORDER = [
   'medellin',
   'bello',
@@ -220,6 +224,7 @@ export default function App() {
   const [showBillingForm, setShowBillingForm] = useState(false);
   const [billingForm, setBillingForm] = useState<BillingFormState>(() => createEmptyBillingForm());
   const [monthlyPlate, setMonthlyPlate] = useState('');
+  const [sessionTimeoutsSeconds, setSessionTimeoutsSeconds] = useState(DEFAULT_SESSION_TIMEOUTS_SECONDS);
   const collectingTouchAtRef = useRef(0);
   const reviewTouchAtRef = useRef(0);
   const paymentLoadingTimerRef = useRef<number | null>(null);
@@ -259,6 +264,21 @@ export default function App() {
   };
   const applyKioskState = (state: KioskStateSummary) => {
     setElectronicBillingFeature(state.features?.electronicBillingEnabled === true);
+
+    const timeouts = state.timeouts;
+    setSessionTimeoutsSeconds({
+      review: msToSecondsOr(timeouts?.reviewMs, DEFAULT_SESSION_TIMEOUTS_SECONDS.review),
+      cash: msToSecondsOr(timeouts?.cashMs, DEFAULT_SESSION_TIMEOUTS_SECONDS.cash),
+      billingDetails: msToSecondsOr(
+        timeouts?.billingDetailsMs,
+        DEFAULT_SESSION_TIMEOUTS_SECONDS.billingDetails,
+      ),
+      monthlySubscription: msToSecondsOr(
+        timeouts?.monthlySubscriptionMs,
+        DEFAULT_SESSION_TIMEOUTS_SECONDS.monthlySubscription,
+      ),
+      finalizing: msToSecondsOr(timeouts?.finalizingMs, DEFAULT_SESSION_TIMEOUTS_SECONDS.finalizing),
+    });
 
     if (state.mode === 'MAINTENANCE') {
       setMaintenanceReason(resolveKioskMaintenanceReason(state));
@@ -636,17 +656,6 @@ export default function App() {
       setRootMode('maintenance');
     });
 
-    eventSource.addEventListener('machine.large-bill-blocked', (event) => {
-      const payload = parseEventPayload(event as MessageEvent);
-      const reason = payload && typeof payload.reason === 'string'
-        ? payload.reason
-        : 'Billete no aceptado por la maquina — contacte al operador';
-      setCancelNotice(null);
-      setMaintenanceReason(reason);
-      resetToIdleFromEvent();
-      setRootMode('maintenance');
-    });
-
     eventSource.addEventListener('kiosk.mode.changed', (event) => {
       const payload = parseEventPayload(event);
       if (!payload) {
@@ -739,7 +748,7 @@ export default function App() {
 
   useEffect(() => {
     if (paymentStage !== 'review') {
-      setReviewCountdownSeconds(REVIEW_TIMEOUT_SECONDS);
+      setReviewCountdownSeconds(sessionTimeoutsSeconds.review);
       return;
     }
 
@@ -747,10 +756,10 @@ export default function App() {
       paymentDetails.sessionType === 'MONTHLY_SUBSCRIPTION';
 
     const timeoutSeconds = showBillingDetailsScreen
-      ? BILLING_DETAILS_TIMEOUT_SECONDS
+      ? sessionTimeoutsSeconds.billingDetails
       : monthlyReviewActive
-        ? MONTHLY_SUBSCRIPTION_TIMEOUT_SECONDS
-        : REVIEW_TIMEOUT_SECONDS;
+        ? sessionTimeoutsSeconds.monthlySubscription
+        : sessionTimeoutsSeconds.review;
 
     setReviewCountdownSeconds(timeoutSeconds);
 
@@ -789,15 +798,16 @@ export default function App() {
     paymentDetails.sessionType,
     showBillingDetailsScreen,
     reviewInteractionVersion,
+    sessionTimeoutsSeconds,
   ]);
 
   useEffect(() => {
     if (paymentStage !== 'finalizing') {
-      setFinalizingCountdownSeconds(30);
+      setFinalizingCountdownSeconds(sessionTimeoutsSeconds.finalizing);
       return;
     }
 
-    setFinalizingCountdownSeconds(30);
+    setFinalizingCountdownSeconds(sessionTimeoutsSeconds.finalizing);
     const countdownTimer = window.setInterval(() => {
       setFinalizingCountdownSeconds((current) => (current > 0 ? current - 1 : 0));
     }, 1000);
@@ -808,21 +818,21 @@ export default function App() {
       resetBillingFlow();
       resetMonthlyFlow();
       // setStatusMessage('Pago finalizado. Puede iniciar un nuevo cobro');
-    }, 30_000);
+    }, sessionTimeoutsSeconds.finalizing * 1000);
 
     return () => {
       window.clearInterval(countdownTimer);
       window.clearTimeout(timer);
     };
-  }, [paymentStage]);
+  }, [paymentStage, sessionTimeoutsSeconds.finalizing]);
 
   useEffect(() => {
     if (paymentStage !== 'collecting') {
-      setCollectingCountdownSeconds(30);
+      setCollectingCountdownSeconds(sessionTimeoutsSeconds.cash);
       return;
     }
 
-    setCollectingCountdownSeconds(30);
+    setCollectingCountdownSeconds(sessionTimeoutsSeconds.cash);
     const countdownTimer = window.setInterval(() => {
       setCollectingCountdownSeconds((current) => (current > 0 ? current - 1 : 0));
     }, 1000);
@@ -835,13 +845,18 @@ export default function App() {
         setCancelNotice((prev) => prev ?? 'Sesion cancelada por inactividad. Regresando al inicio...');
       }
       // If money was inserted, the backend timeout handles the refund via session.timeout SSE event
-    }, 30_000);
+    }, sessionTimeoutsSeconds.cash * 1000);
 
     return () => {
       window.clearInterval(countdownTimer);
       window.clearTimeout(cancelTimer);
     };
-  }, [collectingInteractionVersion, paymentDetails.insertedAmount, paymentStage]);
+  }, [
+    collectingInteractionVersion,
+    paymentDetails.insertedAmount,
+    paymentStage,
+    sessionTimeoutsSeconds.cash,
+  ]);
 
   useEffect(() => {
     if (!cancelNotice) return;
@@ -2148,16 +2163,18 @@ export default function App() {
                       <ReadOnlyField label="Monto adeudado" value={`$ ${currency.format(paymentDetails.amountDue)}`} />
                     </div>
                   )}
-                  <div className="mt-4 grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
-                    <div className="rounded-[1.75rem] border border-alert-200 bg-alert-50 p-4">
-                      <p className="text-sm uppercase tracking-[0.2em] text-alert-600">Antes de pagar</p>
-                      <div className="mt-2 space-y-1 text-sm leading-relaxed text-alert-600">
-                        {FIXED_PAYMENT_WARNINGS.map((warning) => (
-                          <p key={warning}>{warning}</p>
-                        ))}
+                  {FIXED_PAYMENT_WARNINGS.length > 0 && (
+                    <div className="mt-4 grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
+                      <div className="rounded-[1.75rem] border border-alert-200 bg-alert-50 p-4">
+                        <p className="text-sm uppercase tracking-[0.2em] text-alert-600">Antes de pagar</p>
+                        <div className="mt-2 space-y-1 text-sm leading-relaxed text-alert-600">
+                          {FIXED_PAYMENT_WARNINGS.map((warning) => (
+                            <p key={warning}>{warning}</p>
+                          ))}
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )}
                   {electronicBillingEnabled && electronicBillingRequested && (
                     <div className="mt-4 rounded-[1.75rem] border border-brand-100 bg-white/75 p-4">
                       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -3093,6 +3110,12 @@ function asString(value: unknown): string {
 
 function asNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function msToSecondsOr(ms: number | undefined, fallbackSeconds: number): number {
+  return typeof ms === 'number' && Number.isFinite(ms) && ms > 0
+    ? Math.round(ms / 1000)
+    : fallbackSeconds;
 }
 
 function parseMonthlySubscription(value: unknown): MonthlySubscriptionDetails | null {

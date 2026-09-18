@@ -40,6 +40,20 @@ export class KioskController {
           false,
         ),
       },
+      timeouts: {
+        validatingMs: this.configService.get<number>('payment.sessionValidatingTimeoutMs', 15_000),
+        reviewMs: this.configService.get<number>('payment.sessionReviewTimeoutMs', 30_000),
+        cashMs: this.configService.get<number>('payment.sessionCashTimeoutMs', 30_000),
+        billingDetailsMs: this.configService.get<number>(
+          'payment.sessionBillingDetailsTimeoutMs',
+          300_000,
+        ),
+        monthlySubscriptionMs: this.configService.get<number>(
+          'payment.sessionMonthlySubscriptionTimeoutMs',
+          120_000,
+        ),
+        finalizingMs: this.configService.get<number>('payment.sessionFinalizingTimeoutMs', 30_000),
+      },
     };
   }
 

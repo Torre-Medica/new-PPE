@@ -54,6 +54,15 @@ export const appConfig = () => ({
     sessionCashTimeoutMs: process.env.PAYMENT_SESSION_CASH_TIMEOUT_MS
       ? Number(process.env.PAYMENT_SESSION_CASH_TIMEOUT_MS)
       : 30_000,
+    sessionBillingDetailsTimeoutMs: process.env.PAYMENT_SESSION_BILLING_DETAILS_TIMEOUT_MS
+      ? Number(process.env.PAYMENT_SESSION_BILLING_DETAILS_TIMEOUT_MS)
+      : 300_000,
+    sessionMonthlySubscriptionTimeoutMs: process.env.PAYMENT_SESSION_MONTHLY_SUBSCRIPTION_TIMEOUT_MS
+      ? Number(process.env.PAYMENT_SESSION_MONTHLY_SUBSCRIPTION_TIMEOUT_MS)
+      : 120_000,
+    sessionFinalizingTimeoutMs: process.env.PAYMENT_SESSION_FINALIZING_TIMEOUT_MS
+      ? Number(process.env.PAYMENT_SESSION_FINALIZING_TIMEOUT_MS)
+      : 30_000,
   },
   peripherals: {
     simulateHardware: readBooleanEnv(process.env.SIMULATE_HARDWARE, false),
