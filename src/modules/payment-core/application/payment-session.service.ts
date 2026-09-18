@@ -22,7 +22,6 @@ import { QueryCompletedPaymentsDto } from '@modules/payment-core/application/dto
 import { RegisterCashDto } from '@modules/payment-core/application/dto/register-cash.dto';
 import { RetryPendingCommitsDto } from '@modules/payment-core/application/dto/retry-pending-commits.dto';
 import { StartPaymentSessionDto } from '@modules/payment-core/application/dto/start-payment-session.dto';
-import { ValidateMonthlySubscriptionPlateDto } from '@modules/payment-core/application/dto/validate-monthly-subscription-plate.dto';
 import { CashIncidentType } from '@modules/persistence/infrastructure/entities/cash-incident.entity';
 import { PaymentLineEntity } from '@modules/persistence/infrastructure/entities/payment-line.entity';
 import { PaymentSessionEventEntity } from '@modules/persistence/infrastructure/entities/payment-session-event.entity';
@@ -585,9 +584,17 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
     return updatedSession;
   }
 
-  async validateMonthlySubscriptionPlate(
+  /**
+   * Valida la mensualidad contra nexo_back con una placa ya resuelta del
+   * lado del servidor (ver startMonthlySubscriptionSessionFromScan). No hay
+   * endpoint HTTP publico para esto — el PPE nunca deja que el usuario
+   * escriba o cambie la placa de una mensualidad, porque de eso depende la
+   * tarifa (carro vs moto) que se le cobra.
+   */
+  private async applyMonthlyPlateValidation(
     sessionId: string,
-    dto: ValidateMonthlySubscriptionPlateDto,
+    plateInput: string,
+    monthsForPayInput?: number,
   ) {
     if (!this.isMonthlySubscriptionsEnabled()) {
       throw new PaymentSessionConflictError(
@@ -611,7 +618,7 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       );
     }
 
-    const plate = this.normalizeMonthlyPlate(dto.plate);
+    const plate = this.normalizeMonthlyPlate(plateInput);
     const vehicleKind = this.resolveVehicleKindFromPlate(plate);
     if (!vehicleKind) {
       throw new PaymentSessionConflictError(
@@ -627,7 +634,8 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       );
     }
 
-    const monthsForPay = dto.monthsForPay ?? monthlySubscription.monthsForPay ?? 1;
+    const monthsForPay =
+      monthsForPayInput ?? monthlySubscription.monthsForPay ?? 1;
     const validationPayload = {
       identificationType: 'CC' as const,
       identificationCode,
@@ -2004,6 +2012,20 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       const preparation = await this.serverLinkService.prepareMonthlySubscription(
         monthlyIdentification.identificationCode,
       );
+
+      // La placa NUNCA la escribe el usuario en el PPE: sale del scheduling
+      // principal de la cedula (observation -> {"plate":"..."}), resuelto en
+      // NexoBackRestService.resolvePlateFromScheduling. Si no hay una placa
+      // valida registrada, no hay forma segura de saber que tarifa (carro vs
+      // moto) le corresponde — dejar que la escriba equivaldria a dejarlo
+      // elegir su propia tarifa. Se rechaza el pago y se remite a caseta.
+      const resolvedPlate = preparation.customer.resolvedPlate;
+      if (!resolvedPlate) {
+        throw new Error(
+          'No hay una placa registrada para esta cedula. Pago no permitido, realice su primer pago en caseta.',
+        );
+      }
+
       const metadataJson = this.mergeMetadata(session.metadataJson, {
         monthlySubscription: {
           type: 'MONTHLY_SUBSCRIPTION',
@@ -2028,26 +2050,24 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
         metadataJson,
       });
 
-      const reviewedSession = await this.getSessionById(session.id);
       await this.appendEvent(session.id, 'payment.monthly.customer-found', null, {
         identificationCode: preparation.identificationCode,
         customer: preparation.customer,
         service: preparation.service,
+        resolvedPlate,
       });
-
-      const snapshot = this.buildKioskSessionSnapshot(reviewedSession, null);
-      await this.appendEvent(session.id, 'payment.session.review-ready', null, {
-        status: PaymentSessionStatus.Validated,
-        trigger: 'monthly-identification-scanned',
-        monthlySubscription: snapshot.monthlySubscription,
-      });
-      this.kioskEventsService.emit('session.review-ready', snapshot);
 
       this.logger.log(
-        `[MENSUALIDAD] Cedula ${preparation.identificationCode} registrada. Esperando placa | Sesion: ${session.id}`,
+        `[MENSUALIDAD] Cedula ${preparation.identificationCode} registrada. Placa resuelta automaticamente (${resolvedPlate}) | Sesion: ${session.id}`,
       );
 
-      return reviewedSession;
+      // Valida de una vez contra nexo_back (monto, vigencia, etc.) — ya no
+      // existe un paso intermedio de "esperando que el usuario teclee la
+      // placa": si esto rechaza, cae al catch de abajo igual que cualquier
+      // otro fallo de validacion.
+      await this.applyMonthlyPlateValidation(session.id, resolvedPlate, 1);
+
+      return this.getSessionById(session.id);
     } catch (error) {
       const reason =
         error instanceof Error

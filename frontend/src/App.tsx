@@ -38,7 +38,6 @@ const {
   touchKioskSession,
   unloadCashInventoryAndSlot,
   updateDispenserSlot,
-  validateMonthlySubscriptionPlate,
 } = (SIMULATE ? simApi : realApi) as typeof realApi;
 import type {
   AcceptancePolicy,
@@ -221,8 +220,6 @@ export default function App() {
   const [showBillingForm, setShowBillingForm] = useState(false);
   const [billingForm, setBillingForm] = useState<BillingFormState>(() => createEmptyBillingForm());
   const [monthlyPlate, setMonthlyPlate] = useState('');
-  const [monthlyPlateLoading, setMonthlyPlateLoading] = useState(false);
-  const [monthlyPlateError, setMonthlyPlateError] = useState('');
   const collectingTouchAtRef = useRef(0);
   const reviewTouchAtRef = useRef(0);
   const paymentLoadingTimerRef = useRef<number | null>(null);
@@ -255,8 +252,6 @@ export default function App() {
   };
   const resetMonthlyFlow = () => {
     setMonthlyPlate('');
-    setMonthlyPlateLoading(false);
-    setMonthlyPlateError('');
   };
   const setElectronicBillingFeature = (enabled: boolean) => {
     electronicBillingEnabledRef.current = enabled;
@@ -474,7 +469,6 @@ export default function App() {
             asString(payload.vehiclePlate) ??
             '',
         );
-        setMonthlyPlateError(monthlySubscription?.validationError ?? '');
         setShowBillingDetailsScreen(false);
       } else {
         resetMonthlyFlow();
@@ -498,9 +492,7 @@ export default function App() {
       }));
       setStatusMessage(
         sessionType === 'MONTHLY_SUBSCRIPTION'
-          ? monthlySubscription?.validated
-            ? 'Mensualidad validada. Revise el valor a cobrar'
-            : 'Cedula validada. Ingrese la placa'
+          ? 'Mensualidad validada. Revise el valor a cobrar'
           : 'QR validado. Revise el valor a cobrar',
       );
     });
@@ -1025,18 +1017,12 @@ export default function App() {
   const monthlySubscriptionValidated =
     !isMonthlyPayment ||
     (monthlySubscription?.validated === true && paymentDetails.amountDue > 0);
-  const monthlyCustomerName =
-    monthlySubscription?.customer?.customerName ||
-    paymentDetails.identifierValue;
-  const monthlyZone = monthlySubscription?.customer?.schedulingZone ?? '';
-  const monthlyCurrentEnd = monthlySubscription?.customer?.schedulingEndDatetime
-    ? formatBackendDate(monthlySubscription.customer.schedulingEndDatetime)
-    : '';
-  const monthlyRequestedRange =
-    monthlySubscription?.validationDetail?.requestedMonthlySubscriptionStartDatetime &&
-      monthlySubscription.validationDetail.requestedMonthlySubscriptionEndDatetime
-      ? `${formatBackendDate(monthlySubscription.validationDetail.requestedMonthlySubscriptionStartDatetime)} - ${formatBackendDate(monthlySubscription.validationDetail.requestedMonthlySubscriptionEndDatetime)}`
-      : '';
+  const monthlyForecastedEndDate =
+    monthlySubscription?.validationDetail?.requestedMonthlySubscriptionEndDatetime
+      ? formatBackendDate(
+          monthlySubscription.validationDetail.requestedMonthlySubscriptionEndDatetime,
+        )
+      : '-';
 
   const changeAvailableTotal = adminDashboard?.changeInventoryTotal ?? 0;
   const collectedTodayTotal = adminDashboard?.totalCollected ?? 0;
@@ -1124,7 +1110,6 @@ export default function App() {
     setPaymentDetails(details);
     if (details.sessionType === 'MONTHLY_SUBSCRIPTION') {
       setMonthlyPlate(details.monthlySubscription?.plate ?? details.vehiclePlate ?? '');
-      setMonthlyPlateError(details.monthlySubscription?.validationError ?? '');
       setShowBillingChoiceScreen(false);
       setShowBillingDetailsScreen(false);
     }
@@ -1147,9 +1132,7 @@ export default function App() {
       );
       setStatusMessage(
         details.sessionType === 'MONTHLY_SUBSCRIPTION'
-          ? details.monthlySubscription?.validated
-            ? 'Mensualidad validada. Revise el valor a cobrar'
-            : 'Cedula validada. Ingrese la placa'
+          ? 'Mensualidad validada. Revise el valor a cobrar'
           : 'QR validado. Revise el valor a cobrar',
       );
       return;
@@ -1374,42 +1357,6 @@ export default function App() {
     void searchBillingCustomerByDocument(document);
   };
 
-  const acceptMonthlyPlate = async (value: string) => {
-    const plate = normalizePlateInput(value);
-    setMonthlyPlate(plate);
-    setMonthlyPlateError('');
-
-    if (!paymentDetails.paymentSessionId) {
-      setMonthlyPlateError('No hay una sesion mensual activa');
-      return;
-    }
-
-    if (!isValidMonthlyPlate(plate)) {
-      setMonthlyPlateError("Campo 'Placa' no tiene formato de carro o de moto");
-      return;
-    }
-
-    setMonthlyPlateLoading(true);
-    try {
-      const session = await validateMonthlySubscriptionPlate(
-        paymentDetails.paymentSessionId,
-        plate,
-        monthlySubscription?.monthsForPay ?? 1,
-      );
-      applySessionSummary(session);
-      setMonthlyPlateError('');
-      setStatusMessage('Mensualidad validada. Revise el valor a cobrar');
-    } catch (error) {
-      setMonthlyPlateError(
-        error instanceof Error
-          ? cleanApiErrorMessage(error.message)
-          : 'No fue posible validar la mensualidad',
-      );
-    } finally {
-      setMonthlyPlateLoading(false);
-    }
-  };
-
   const submitBillingCustomer = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
@@ -1505,7 +1452,7 @@ export default function App() {
     }
 
     if (isMonthlyPayment && !monthlySubscriptionValidated) {
-      setMonthlyPlateError('Valide la placa antes de pagar la mensualidad');
+      setStatusMessage('La mensualidad no quedo validada. Vuelva a escanear la cedula.');
       return;
     }
 
@@ -2188,64 +2135,17 @@ export default function App() {
                       {reviewCountdownSeconds > 0 ? `Cancelacion en: ${formatReviewCountdown(reviewCountdownSeconds)}` : 'Cancelando...'}
                     </div>
                   </div>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <ReadOnlyField label={paymentDetails.identifierLabel} value={paymentDetails.identifierValue} />
-                    <ReadOnlyField label="Hora de entrada" value={paymentDetails.enteredAt} />
-                    <ReadOnlyField label="Monto adeudado" value={`$ ${currency.format(paymentDetails.amountDue)}`} />
-                    {/* <ReadOnlyField label="Estado" value="Listo para cobro" /> */}
-                  </div>
-                  {isMonthlyPayment && (
-                    <div className="mt-4 rounded-[1.75rem] border border-brand-100 bg-white/75 p-4">
-                      <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                        <div>
-                          <p className="text-sm uppercase tracking-[0.2em] text-brand-700">Mensualidad</p>
-                          <p className="mt-1 text-sm text-muted">{monthlyCustomerName}</p>
-                        </div>
-                        <div className="rounded-full bg-white/80 px-4 py-1.5 text-sm font-medium text-muted">
-                          {monthlySubscription?.validated ? 'Validada' : 'Pendiente de placa'}
-                        </div>
-                      </div>
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <ReadOnlyField label="Zona" value={monthlyZone || '-'} />
-                        <ReadOnlyField label="Vigencia actual" value={monthlyCurrentEnd || 'Sin vigencia activa'} />
-                        <ReadOnlyField label="Placa" value={monthlySubscription?.plate || monthlyPlate || 'Pendiente'} />
-                        <ReadOnlyField label="Tipo" value={monthlySubscription?.vehicleKind || '-'} />
-                        {monthlyRequestedRange && (
-                          <ReadOnlyField label="Nueva vigencia" value={monthlyRequestedRange} />
-                        )}
-                      </div>
-                      <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto]">
-                        <button
-                          type="button"
-                          className="touch-input min-h-[4rem] cursor-pointer text-left"
-                          onClick={() => setKeyboardModal({
-                            label: 'Placa',
-                            initialValue: monthlyPlate,
-                            type: 'text',
-                            acceptLabel: 'Validar',
-                            onAccept: (plate) => {
-                              setKeyboardModal(null);
-                              void acceptMonthlyPlate(plate);
-                            },
-                          })}
-                          disabled={monthlyPlateLoading}
-                        >
-                          {monthlyPlate || 'Ingrese placa'}
-                        </button>
-                        <button
-                          type="button"
-                          className="touch-button-secondary !min-h-[4rem] !px-6"
-                          onClick={() => void acceptMonthlyPlate(monthlyPlate)}
-                          disabled={monthlyPlateLoading || !monthlyPlate}
-                        >
-                          {monthlyPlateLoading ? 'Validando...' : 'Validar'}
-                        </button>
-                      </div>
-                      {monthlyPlateError && (
-                        <div className="mt-3 rounded-3xl border border-alert-200 bg-alert-50 px-4 py-3 text-sm text-alert-600">
-                          {monthlyPlateError}
-                        </div>
-                      )}
+                  {isMonthlyPayment ? (
+                    <div className="grid gap-3 md:grid-cols-3">
+                      <ReadOnlyField label="Placa" value={monthlySubscription?.plate || monthlyPlate || '-'} />
+                      <ReadOnlyField label="Monto a cobrar" value={`$ ${currency.format(paymentDetails.amountDue)}`} />
+                      <ReadOnlyField label="Fecha fin pronosticada" value={monthlyForecastedEndDate} />
+                    </div>
+                  ) : (
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <ReadOnlyField label={paymentDetails.identifierLabel} value={paymentDetails.identifierValue} />
+                      <ReadOnlyField label="Hora de entrada" value={paymentDetails.enteredAt} />
+                      <ReadOnlyField label="Monto adeudado" value={`$ ${currency.format(paymentDetails.amountDue)}`} />
                     </div>
                   )}
                   <div className="mt-4 grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
@@ -2284,8 +2184,7 @@ export default function App() {
                       paymentLoading ||
                       billingLoading ||
                       (electronicBillingEnabled && electronicBillingRequested && !billingCustomer?.exist) ||
-                      !monthlySubscriptionValidated ||
-                      monthlyPlateLoading
+                      !monthlySubscriptionValidated
                     }
                   >
                     Pagar
@@ -3203,34 +3102,6 @@ function parseMonthlySubscription(value: unknown): MonthlySubscriptionDetails | 
 
   const record = value as MonthlySubscriptionDetails;
   return record.type === 'MONTHLY_SUBSCRIPTION' ? record : null;
-}
-
-function normalizePlateInput(value: string): string {
-  return value.trim().toUpperCase().replace(/\s+/g, '');
-}
-
-function isValidMonthlyPlate(plate: string): boolean {
-  return (
-    /^[A-Z]{3}[0-9]{3}$/.test(plate) ||
-    /^[A-Z]{3}[0-9]{2}[A-Z]$/.test(plate) ||
-    /^[A-Z]{3}[0-9]{2}$/.test(plate)
-  );
-}
-
-function cleanApiErrorMessage(value: string): string {
-  try {
-    const parsed = JSON.parse(value) as { message?: unknown; error?: unknown };
-    if (typeof parsed.message === 'string' && parsed.message.trim()) {
-      return parsed.message;
-    }
-    if (typeof parsed.error === 'string' && parsed.error.trim()) {
-      return parsed.error;
-    }
-  } catch {
-    return value;
-  }
-
-  return value;
 }
 
 function parseAcceptancePolicy(value: unknown): AcceptancePolicy | null {

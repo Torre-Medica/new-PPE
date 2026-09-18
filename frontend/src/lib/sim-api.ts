@@ -205,23 +205,6 @@ export function activateKioskCollection(
   });
 }
 
-export function validateMonthlySubscriptionPlate(
-  paymentSessionId: string,
-  plate: string,
-  monthsForPay = 1,
-) {
-  return apiFetch<SimBackendSession>(
-    `/kiosk/sim/payment-sessions/${paymentSessionId}/monthly-subscription/validate`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ plate, monthsForPay }),
-    },
-  ).then((session) => {
-    fireReviewReady(session);
-    return toKioskSummary(session);
-  });
-}
-
 export function startSimulatedPaymentSession(targetAmount: number, qrCode: string) {
   return apiFetch<SimBackendSession>('/kiosk/sim/start', {
     method: 'POST',

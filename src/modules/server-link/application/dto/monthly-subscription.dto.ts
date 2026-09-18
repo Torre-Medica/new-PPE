@@ -25,6 +25,14 @@ export interface MonthlySubscriptionCustomerSummary {
   plate1?: string;
   plate2?: string;
   plate3?: string;
+  /**
+   * Placa resuelta del scheduling principal de la cedula (columna
+   * `observation` de nexo_back, JSON `{"plate":"ABC123"}`), ya normalizada
+   * y validada como formato carro/moto. Undefined si no hay ninguna
+   * scheduling registrada o su observation no trae una placa valida —
+   * en ese caso el pago de mensualidad no debe permitirse desde el PPE.
+   */
+  resolvedPlate?: string;
   rawCustomer?: unknown;
   rawSaic?: unknown;
   [key: string]: unknown;

@@ -46,27 +46,6 @@ export interface KioskSessionSummary {
   } | null;
 }
 
-async function readApiError(response: Response, fallback: string): Promise<string> {
-  const text = await response.text().catch(() => '');
-  if (!text) {
-    return fallback;
-  }
-
-  try {
-    const parsed = JSON.parse(text) as { message?: unknown; error?: unknown };
-    if (typeof parsed.message === 'string' && parsed.message.trim()) {
-      return parsed.message;
-    }
-    if (typeof parsed.error === 'string' && parsed.error.trim()) {
-      return parsed.error;
-    }
-  } catch {
-    return text;
-  }
-
-  return fallback;
-}
-
 export async function fetchKioskState(): Promise<KioskStateSummary> {
   const response = await fetch(`${API_PREFIX}/kiosk/state`);
   if (!response.ok) {
@@ -122,31 +101,6 @@ export async function activateKioskCollection(
   }
 
   return response.json();
-}
-
-export async function validateMonthlySubscriptionPlate(
-  paymentSessionId: string,
-  plate: string,
-  monthsForPay = 1,
-): Promise<KioskSessionSummary> {
-  const response = await fetch(
-    `${API_PREFIX}/kiosk/payment-sessions/${paymentSessionId}/monthly-subscription/validate`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ plate, monthsForPay }),
-    },
-  );
-
-  if (!response.ok) {
-    throw new Error(
-      await readApiError(response, 'No fue posible validar la mensualidad'),
-    );
-  }
-
-  return response.json() as Promise<KioskSessionSummary>;
 }
 
 export async function fetchElectronicBillingCatalogs(): Promise<ElectronicBillingCatalogs> {

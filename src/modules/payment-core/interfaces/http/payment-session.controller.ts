@@ -8,7 +8,6 @@ import { QueryCompletedPaymentsDto } from '@modules/payment-core/application/dto
 import { RegisterCashDto } from '@modules/payment-core/application/dto/register-cash.dto';
 import { RetryPendingCommitsDto } from '@modules/payment-core/application/dto/retry-pending-commits.dto';
 import { StartPaymentSessionDto } from '@modules/payment-core/application/dto/start-payment-session.dto';
-import { ValidateMonthlySubscriptionPlateDto } from '@modules/payment-core/application/dto/validate-monthly-subscription-plate.dto';
 import { PaymentSessionService } from '@modules/payment-core/application/payment-session.service';
 
 @UseFilters(DomainExceptionFilter)
@@ -37,18 +36,6 @@ export class PaymentSessionController {
     @Body() dto: ActivatePaymentCollectionDto,
   ) {
     return this.paymentSessionService.activateCollection(sessionId, dto);
-  }
-
-  @Roles(LocalApiRole.Admin, LocalApiRole.Operator)
-  @Post(':id/monthly-subscription/validate')
-  validateMonthlySubscriptionPlate(
-    @Param('id') sessionId: string,
-    @Body() dto: ValidateMonthlySubscriptionPlateDto,
-  ) {
-    return this.paymentSessionService.validateMonthlySubscriptionPlate(
-      sessionId,
-      dto,
-    );
   }
 
   @Roles(LocalApiRole.Admin, LocalApiRole.Operator)

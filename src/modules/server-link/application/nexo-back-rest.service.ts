@@ -456,9 +456,46 @@ export class NexoBackRestService {
       plate1: this.readString(customer.plate1) ?? undefined,
       plate2: this.readString(customer.plate2) ?? undefined,
       plate3: this.readString(customer.plate3) ?? undefined,
+      resolvedPlate: this.resolvePlateFromScheduling(saicResponse) ?? undefined,
       rawCustomer: customerResponse,
       rawSaic: saicResponse,
     };
+  }
+
+  /**
+   * El scheduling principal (GET /saic/citizenshipcard-scheduling) guarda la
+   * placa del vehiculo como JSON de texto en su columna `observation`
+   * (ej. {"plate": "ABC123"}). Ninguna otra fuente es confiable para saber
+   * que placa tiene realmente asociada esa cedula, asi que si el observation
+   * falta, no es JSON valido, o la placa no tiene formato de carro/moto,
+   * devolvemos null en vez de un valor a medias: dejar que el usuario la
+   * escriba equivale a dejarlo elegir su propia tarifa.
+   */
+  private resolvePlateFromScheduling(citizenship: unknown): string | null {
+    const scheduling = this.asRecord(this.asRecord(citizenship).scheduling);
+    const observation = this.readString(scheduling.observation);
+    if (!observation) {
+      return null;
+    }
+
+    let parsed: JsonRecord;
+    try {
+      parsed = this.asRecord(JSON.parse(observation));
+    } catch {
+      return null;
+    }
+
+    const plate = this.readString(parsed.plate)
+      ?.trim()
+      .toUpperCase()
+      .replace(/\s+/g, '');
+    if (!plate) {
+      return null;
+    }
+
+    const isCarPlate = /^[A-Z]{3}[0-9]{3}$/.test(plate);
+    const isMotoPlate = /^[A-Z]{3}[0-9]{2}[A-Z]?$/.test(plate);
+    return isCarPlate || isMotoPlate ? plate : null;
   }
 
   private async getToken(): Promise<string> {

@@ -10,7 +10,6 @@ import { ActivatePaymentCollectionDto } from '@modules/payment-core/application/
 import { CompleteSessionDto } from '@modules/payment-core/application/dto/complete-session.dto';
 import { RegisterCashDto } from '@modules/payment-core/application/dto/register-cash.dto';
 import { StartPaymentSessionDto } from '@modules/payment-core/application/dto/start-payment-session.dto';
-import { ValidateMonthlySubscriptionPlateDto } from '@modules/payment-core/application/dto/validate-monthly-subscription-plate.dto';
 import { PaymentSessionService } from '@modules/payment-core/application/payment-session.service';
 import { PrintingService } from '@modules/printing/application/printing.service';
 
@@ -84,18 +83,6 @@ export class KioskController {
   }
 
   @Public()
-  @Post('payment-sessions/:id/monthly-subscription/validate')
-  validateMonthlySubscriptionPlate(
-    @Param('id') sessionId: string,
-    @Body() dto: ValidateMonthlySubscriptionPlateDto,
-  ) {
-    return this.paymentSessionService.validateMonthlySubscriptionPlate(
-      sessionId,
-      dto,
-    );
-  }
-
-  @Public()
   @Post('payment-sessions/:id/print-receipt')
   printReceipt(@Param('id') sessionId: string) {
     return this.printingService.printPaymentReceipt(sessionId);
@@ -114,18 +101,6 @@ export class KioskController {
     @Body() dto: ActivatePaymentCollectionDto,
   ) {
     return this.paymentSessionService.activateSimulatedCollection(sessionId, dto);
-  }
-
-  @Public()
-  @Post('sim/payment-sessions/:id/monthly-subscription/validate')
-  validateSimulatedMonthlySubscriptionPlate(
-    @Param('id') sessionId: string,
-    @Body() dto: ValidateMonthlySubscriptionPlateDto,
-  ) {
-    return this.paymentSessionService.validateMonthlySubscriptionPlate(
-      sessionId,
-      dto,
-    );
   }
 
   @Public()
