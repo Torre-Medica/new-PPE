@@ -232,6 +232,7 @@ export default function App() {
   const electronicBillingEnabledRef = useRef(false);
   const rootModeRef = useRef<RootMode>('payment');
   const paymentStageRef = useRef<PaymentStage>('idle');
+  const paymentSessionIdRef = useRef<string | undefined>(undefined);
   const [keyboardModal, setKeyboardModal] = useState<{
     label: string;
     initialValue: string;
@@ -418,6 +419,10 @@ export default function App() {
   }, [paymentStage]);
 
   useEffect(() => {
+    paymentSessionIdRef.current = paymentDetails.paymentSessionId;
+  }, [paymentDetails.paymentSessionId]);
+
+  useEffect(() => {
     const storedSession = readStoredAdminSession();
     if (storedSession) {
       setAdminSession(storedSession);
@@ -453,6 +458,15 @@ export default function App() {
     });
 
     eventSource.addEventListener('qr.ignored', (event) => {
+      // El backend emite esto tambien cuando el QR/cedula reescaneado se
+      // rechaza SOLO porque ya hay una sesion activa en curso (ver
+      // handleQrScannedEvent) — un reescaneo mientras se muestra la pantalla
+      // de pago (mensualidad u otro) no debe reiniciarla ni cortarle su
+      // tiempo de espera; la sesion vigente sigue intacta en el backend.
+      if (paymentStageRef.current !== 'idle' && paymentStageRef.current !== 'scanning') {
+        return;
+      }
+
       const payload = parseEventPayload(event);
       setPaymentStage('idle');
       setPaymentDetails(demoPayment);
@@ -619,8 +633,20 @@ export default function App() {
       setStatusMessage('Escanee su QR para iniciar el pago');
     };
 
+    // Un re-escaneo (ej. QR/cedula de mensualidad leido varias veces) crea
+    // una sesion nueva y deja la anterior huerfana en el backend; esa sesion
+    // vieja expira sola minutos despues y emite su propio session.timeout.
+    // Sin este filtro, ese evento tardio cerraba la sesion actual (valida,
+    // con tiempo de sobra) solo porque coincidia con estar en pantalla de
+    // pago — de ahi que la pantalla "se saliera" sin razon.
+    const belongsToCurrentSession = (payload: Record<string, unknown> | null) =>
+      !payload?.paymentSessionId || payload.paymentSessionId === paymentSessionIdRef.current;
+
     eventSource.addEventListener('session.timeout', (event) => {
       const payload = parseEventPayload(event as MessageEvent);
+      if (!belongsToCurrentSession(payload)) {
+        return;
+      }
       if (paymentLoadingTimerRef.current !== null) {
         window.clearTimeout(paymentLoadingTimerRef.current);
         paymentLoadingTimerRef.current = null;
@@ -632,7 +658,13 @@ export default function App() {
         : 'Sesion cancelada por inactividad. Regresando al inicio...';
       setCancelNotice((prev) => prev ?? msg);
     });
-    eventSource.addEventListener('session.canceled', resetToIdleFromEvent);
+    eventSource.addEventListener('session.canceled', (event) => {
+      const payload = parseEventPayload(event as MessageEvent);
+      if (!belongsToCurrentSession(payload)) {
+        return;
+      }
+      resetToIdleFromEvent();
+    });
 
     eventSource.addEventListener('machine.refund-alert', (event) => {
       const payload = parseEventPayload(event as MessageEvent);
