@@ -72,6 +72,9 @@ export const appConfig = () => ({
     qrScannerBaudRate: process.env.QR_SCANNER_BAUD_RATE
       ? Number(process.env.QR_SCANNER_BAUD_RATE)
       : 115200,
+    qrScannerDuplicateCooldownMs: process.env.QR_SCANNER_DUPLICATE_COOLDOWN_MS
+      ? Number(process.env.QR_SCANNER_DUPLICATE_COOLDOWN_MS)
+      : 4_000,
     billValidatorPort: process.env.BILL_VALIDATOR_PORT ?? '',
     electronicBoardPort: process.env.ELECTRONIC_BOARD_PORT ?? '',
     electronicBoardUsbVid: process.env.ELECTRONIC_BOARD_USB_VID ?? '',

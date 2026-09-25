@@ -79,7 +79,13 @@ export class PeripheralsService implements OnApplicationBootstrap {
   private readonly billValidator: BillAcceptorPort;
   private readonly electronicBoard: ChangeDispenserPort;
   private readonly qrScanner: QrScannerPort;
+  // Cooldown por codigo: mientras el mismo QR siga frente al lector puede
+  // emitir varias lecturas seguidas: se ignoran las repeticiones del mismo
+  // codigo dentro de esta ventana para no disparar sesiones/validaciones duplicadas.
+  private readonly qrDuplicateCooldownMs: number;
   private lastQrScan: QrScannedEvent | null = null;
+  private lastAcceptedQrCode: string | null = null;
+  private lastAcceptedQrAt = 0;
   private qrConnectedPort: string | null = null;
   private qrReconnectTimer: NodeJS.Timeout | null = null;
   private boardReconnectTimer: NodeJS.Timeout | null = null;
@@ -100,6 +106,8 @@ export class PeripheralsService implements OnApplicationBootstrap {
     const boardPath = this.configService.get<string>('peripherals.electronicBoardLegacyPath') ?? '';
     const qrBaudRate = this.configService.get<number>('peripherals.qrScannerBaudRate') ?? 115200;
     const simulateHardware = this.configService.get<boolean>('peripherals.simulateHardware', false);
+    this.qrDuplicateCooldownMs =
+      this.configService.get<number>('peripherals.qrScannerDuplicateCooldownMs') ?? 4_000;
 
     if (simulateHardware) {
       this.logger.warn('SIMULATE_HARDWARE activo: perifericos operaran en modo simulado (sin hardware fisico)');
@@ -679,6 +687,17 @@ export class PeripheralsService implements OnApplicationBootstrap {
     });
 
     this.qrScanner.onQrCode((qrCode, rawCode) => {
+      const now = Date.now();
+      if (
+        this.lastAcceptedQrCode === qrCode &&
+        now - this.lastAcceptedQrAt < this.qrDuplicateCooldownMs
+      ) {
+        this.logger.debug(`QR ignorado por cooldown (mismo codigo hace <4s): ${qrCode}`);
+        return;
+      }
+      this.lastAcceptedQrCode = qrCode;
+      this.lastAcceptedQrAt = now;
+
       const qrEvent = {
         source: 'QR_SCANNER',
         qrCode,

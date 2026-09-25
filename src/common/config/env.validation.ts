@@ -34,6 +34,7 @@ export const envValidationSchema = Joi.object({
   ELECTRONIC_BOARD_LEGACY_PATH: Joi.string().allow('').default(''),
   QR_SCANNER_PORT: Joi.string().allow('').default(''),
   QR_SCANNER_BAUD_RATE: Joi.number().integer().min(1200).default(115200),
+  QR_SCANNER_DUPLICATE_COOLDOWN_MS: Joi.number().integer().min(0).default(4_000),
   BILL_VALIDATOR_PORT: Joi.string().allow('').default(''),
   ELECTRONIC_BOARD_PORT: Joi.string().allow('').default(''),
   ELECTRONIC_BOARD_USB_VID: Joi.string().allow('').default(''),
