@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=PPE Kiosk
+Exec=/bin/bash /home/servercoins/Desktop/new-PPE/scripts/start-kiosk.sh
+Terminal=false
+X-GNOME-Autostart-enabled=true

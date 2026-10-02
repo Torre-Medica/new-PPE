@@ -2491,22 +2491,58 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       // returnChange() manda un solo trama con el total y las 4 denominaciones —
       // ver el comentario equivalente en el flujo de cambio automatico mas arriba
       // en este archivo.
-      const commandAudit = await this.peripheralsService.returnChange(returnItems);
+      // Devolucion sin testigo: a diferencia del cambio automatico al completar
+      // un pago (donde el cliente esta parado frente a la maquina y notaria de
+      // inmediato si no le sale el cambio), en TIMEOUT/CANCEL no hay nadie
+      // verificando que el efectivo salio fisicamente. Por eso aqui se usa
+      // returnChangeReliable() (ACK por denominacion, con reintento) en vez de
+      // returnChange() (una sola trama, sin confirmacion de hardware alguna) —
+      // para que una falla de expulsion quede detectada y alertada en vez de
+      // asumida como exitosa.
+      const { confirmedItems, unconfirmedItems } =
+        await this.peripheralsService.returnChangeReliable(returnItems);
       // Garantizar que billetero y placa queden desactivados tras dispensar
       this.peripheralsService.deactivateAcceptance();
       this.syncCashInventoryToNexoBack();
 
+      const confirmedAmount = confirmedItems.reduce(
+        (sum, item) => sum + item.denomination * item.quantity,
+        0,
+      );
+
       await this.appendEvent(session.id, 'payment.refunded', session.insertedAmount, {
         insertedAmount: session.insertedAmount,
         refundPlan: refundPlan.items,
-        commandAudit,
+        confirmedItems,
+        unconfirmedItems,
         context,
       });
 
+      if (unconfirmedItems.length > 0) {
+        this.logger.error(
+          `[${context}][DEVOLUCION] La placa no confirmo la expulsion de ` +
+          `${unconfirmedItems.map((i) => `${i.quantity}x$${i.denomination.toLocaleString('es-CO')}`).join(', ')}` +
+          ` (de $${session.insertedAmount.toLocaleString('es-CO')} COP) | Sesion: ${session.id}. REQUIERE ATENCION MANUAL.`,
+        );
+        await this.appendEvent(session.id, 'payment.refund-unconfirmed', session.insertedAmount, {
+          insertedAmount: session.insertedAmount,
+          confirmedAmount,
+          unconfirmedItems,
+          alert: 'REQUIERE DEVOLUCION MANUAL',
+          context,
+        });
+        this.kioskEventsService.emit('machine.refund-alert', {
+          paymentSessionId: session.id,
+          insertedAmount: session.insertedAmount,
+          reason: 'La placa no confirmo la expulsion de parte o todo el efectivo — contacte al operador',
+        });
+      }
+
       this.logger.log(
-        `[${context}][DEVOLUCION] Devueltos $${session.insertedAmount.toLocaleString('es-CO')} COP` +
+        `[${context}][DEVOLUCION] Devueltos $${confirmedAmount.toLocaleString('es-CO')} COP` +
+        ` de $${session.insertedAmount.toLocaleString('es-CO')} COP` +
         ` | Sesion: ${session.id}` +
-        ` | Plan: ${refundPlan.items.map((i) => `${i.quantity}x$${i.denominationId.toLocaleString('es-CO')}`).join(', ')}`,
+        ` | Plan: ${confirmedItems.map((i) => `${i.quantity}x$${i.denomination.toLocaleString('es-CO')}`).join(', ')}`,
       );
     } catch (error) {
       this.logger.error(

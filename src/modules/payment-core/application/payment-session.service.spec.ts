@@ -485,6 +485,100 @@ describe('PaymentSessionService', () => {
     expect(peripheralsService.returnChangeReliable).not.toHaveBeenCalled();
   });
 
+  it('refunds inserted cash via returnChangeReliable (hardware-confirmed) when canceling', async () => {
+    const {
+      service,
+      paymentSessionRepository,
+      paymentSessionEventRepository,
+      cashChangeService,
+      peripheralsService,
+      kioskEventsService,
+    } = createService();
+
+    const session = makeSession({
+      status: PaymentSessionStatus.ListeningCash,
+      insertedAmount: 5000,
+    });
+    const canceledSession = makeSession({
+      status: PaymentSessionStatus.Canceled,
+      insertedAmount: 5000,
+      completedAt: new Date(),
+    });
+
+    paymentSessionRepository.findOne
+      .mockResolvedValueOnce(session)
+      .mockResolvedValueOnce(canceledSession);
+    cashChangeService.planChange.mockResolvedValue({
+      remaining: 0,
+      items: [{ denominationId: 1000, quantity: 5 }],
+    });
+    peripheralsService.returnChangeReliable.mockResolvedValue({
+      confirmedItems: [
+        { slotKey: 'bill1', denomination: 1000, quantity: 5, confirmed: true, timedOut: false },
+      ],
+      unconfirmedItems: [],
+    });
+
+    await service.cancelSession('session-1');
+
+    expect(peripheralsService.returnChangeReliable).toHaveBeenCalledWith([
+      { slotKey: 'bill1', denomination: 1000, quantity: 5 },
+    ]);
+    expect(peripheralsService.returnChange).not.toHaveBeenCalled();
+    expect(kioskEventsService.emit).not.toHaveBeenCalledWith(
+      'machine.refund-alert',
+      expect.anything(),
+    );
+    expect(paymentSessionEventRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'payment.refunded' }),
+    );
+  });
+
+  it('alerts the operator when the board does not confirm dispensing a cancel refund', async () => {
+    const {
+      service,
+      paymentSessionRepository,
+      paymentSessionEventRepository,
+      cashChangeService,
+      peripheralsService,
+      kioskEventsService,
+    } = createService();
+
+    const session = makeSession({
+      status: PaymentSessionStatus.ListeningCash,
+      insertedAmount: 5000,
+    });
+    const canceledSession = makeSession({
+      status: PaymentSessionStatus.Canceled,
+      insertedAmount: 5000,
+      completedAt: new Date(),
+    });
+
+    paymentSessionRepository.findOne
+      .mockResolvedValueOnce(session)
+      .mockResolvedValueOnce(canceledSession);
+    cashChangeService.planChange.mockResolvedValue({
+      remaining: 0,
+      items: [{ denominationId: 1000, quantity: 5 }],
+    });
+    peripheralsService.returnChangeReliable.mockResolvedValue({
+      confirmedItems: [],
+      unconfirmedItems: [
+        { slotKey: 'bill1', denomination: 1000, quantity: 5, confirmed: false, timedOut: true },
+      ],
+    });
+
+    await service.cancelSession('session-1');
+
+    expect(kioskEventsService.emit).toHaveBeenCalledWith(
+      'machine.refund-alert',
+      expect.objectContaining({ paymentSessionId: 'session-1', insertedAmount: 5000 }),
+    );
+    expect(paymentSessionEventRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'payment.refund-unconfirmed' }),
+    );
+  });
+
   // ── Fase 10: error de servidor en commit → CompletedWithWarning ───────────
 
   it('marks session as CompletedWithWarning when server rejects commit', async () => {
