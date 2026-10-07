@@ -81,8 +81,8 @@ const FIXED_PAYMENT_WARNINGS: string[] = [];
 // vieja) - en operacion normal, todo tiempo de espera lo controla el .env
 // del PPE (ver PAYMENT_SESSION_*_TIMEOUT_MS) y llega via GET /kiosk/state.
 const DEFAULT_SESSION_TIMEOUTS_SECONDS = {
-  review: 30,
-  cash: 30,
+  review: 120,
+  cash: 120,
   billingDetails: 5 * 60,
   monthlySubscription: 2 * 60,
   finalizing: 30,
@@ -1185,9 +1185,14 @@ export default function App() {
       return;
     }
 
+    // DISPENSING_CHANGE: el backend esta devolviendo el cambio (~20-25 s) antes
+    // de confirmar con el servidor central. Sin este caso, el sondeo de cada 2 s
+    // caia al 'idle' de abajo y la pantalla volvia al inicio justo al terminar
+    // de pagar, sin mostrar "Gracias por su pago" ni la opcion de imprimir.
     if (
       session.status === 'LISTENING_CASH' ||
       session.status === 'CHANGE_PENDING' ||
+      session.status === 'DISPENSING_CHANGE' ||
       session.status === 'READY_TO_COMMIT'
     ) {
       setPaymentStage('collecting');
@@ -1493,6 +1498,21 @@ export default function App() {
     }
   };
 
+  // Boton "Cancelar" de la pantalla de revision: misma salida que el
+  // temporizador de inactividad, pero a pedido del cliente.
+  const handleCancelPayment = () => {
+    const sessionId = paymentDetails.paymentSessionId;
+    if (sessionId) void cancelKioskSession(sessionId).catch(() => undefined);
+    // Si ya habia ingresado dinero, el backend lo devuelve al cancelar.
+    setCancelNotice(
+      (prev) =>
+        prev ??
+        (paymentDetails.insertedAmount > 0
+          ? 'Operacion cancelada. Devolviendo su dinero...'
+          : 'Operacion cancelada. Regresando al inicio...'),
+    );
+  };
+
   const beginCollection = async () => {
     if (!paymentDetails.paymentSessionId || paymentLoading) {
       return;
@@ -1562,6 +1582,7 @@ export default function App() {
       if (
         resultStatus === 'LISTENING_CASH' ||
         resultStatus === 'CHANGE_PENDING' ||
+        resultStatus === 'DISPENSING_CHANGE' ||
         resultStatus === 'READY_TO_COMMIT'
       ) {
         setPaymentStage('collecting');
@@ -2224,20 +2245,30 @@ export default function App() {
                       </div>
                     </div>
                   )}
-                  <button
-                    className="touch-button-primary mt-4 w-full"
-                    onClick={() => void beginCollection()}
-                    disabled={
-                      (electronicBillingEnabled && showBillingChoiceScreen) ||
-                      (electronicBillingEnabled && showBillingDetailsScreen) ||
-                      paymentLoading ||
-                      billingLoading ||
-                      (electronicBillingEnabled && electronicBillingRequested && !billingCustomer?.exist) ||
-                      !monthlySubscriptionValidated
-                    }
-                  >
-                    Pagar
-                  </button>
+                  <div className="mt-4 flex gap-3">
+                    <button
+                      className="touch-button-primary flex-1"
+                      onClick={() => void beginCollection()}
+                      disabled={
+                        (electronicBillingEnabled && showBillingChoiceScreen) ||
+                        (electronicBillingEnabled && showBillingDetailsScreen) ||
+                        paymentLoading ||
+                        billingLoading ||
+                        (electronicBillingEnabled && electronicBillingRequested && !billingCustomer?.exist) ||
+                        !monthlySubscriptionValidated
+                      }
+                    >
+                      Pagar
+                    </button>
+                    <button
+                      type="button"
+                      className="touch-button flex-1 bg-red-600 text-white shadow-md hover:bg-red-700 active:bg-red-800"
+                      onClick={handleCancelPayment}
+                      disabled={paymentLoading}
+                    >
+                      Cancelar
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -2263,6 +2294,16 @@ export default function App() {
                             ? 'Procesando devolucion...'
                             : 'Cancelando...'}
                       </div>
+                      {/* Con el monto ya cubierto el pago se completa solo (entrega de
+                          cambio) y el backend no permite cancelar. */}
+                      <button
+                        type="button"
+                        className="touch-button !min-h-[2.75rem] !px-5 text-sm bg-red-600 text-white shadow-md hover:bg-red-700 active:bg-red-800"
+                        onClick={handleCancelPayment}
+                        disabled={pendingAmount === 0 || collectingCountdownSeconds === 0}
+                      >
+                        Cancelar
+                      </button>
                     </div>
                   </div>
 

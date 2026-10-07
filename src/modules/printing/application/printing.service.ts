@@ -12,6 +12,7 @@ import {
 import { SERVER_LINK_PORT } from '@modules/server-link/domain/ports/server-link.port';
 import type { ServerLinkPort } from '@modules/server-link/domain/ports/server-link.port';
 import type { CompanyInfoSummary } from '@modules/server-link/application/dto/company-info.dto';
+import type { PaymentInvoice } from '@modules/server-link/application/dto/payment-invoice.dto';
 
 type PrinterConfigRecord = {
   JAVA_SERVER_URL: string;
@@ -162,6 +163,33 @@ export class PrintingService {
     const isMonthlySubscriptionReceipt = Boolean(
       monthlySubscriptionStartAt && monthlySubscriptionEndAt,
     );
+    const vehiclePlate = metadata?.validation?.vehiclePlate?.trim() || null;
+
+    // Factura completa (la misma de la caja del servidor) si el pago ya quedo
+    // registrado en nexo_back; si no se puede obtener, va el recibo basico.
+    const serverPaymentId = metadata?.commit?.serverPaymentId;
+    if (serverPaymentId) {
+      try {
+        const invoice = await this.serverLink.getPaymentInvoice(serverPaymentId);
+        if (invoice) {
+          return this.sendToPrinter(
+            this.buildInvoiceOperations(invoice, {
+              plate: vehiclePlate,
+              startedAt,
+              monthlyStartAt: monthlySubscriptionStartAt,
+              monthlyEndAt: monthlySubscriptionEndAt,
+            }),
+          );
+        }
+      } catch (error) {
+        console.error(
+          `No se pudo obtener la factura del pago ${serverPaymentId}; se imprime el recibo basico: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
     const companyInfo = await this.getCompanyInfoSafe();
     const operations: PrinterOperation[] = [
       { accion: 'textalign', datos: 'center' },
@@ -200,6 +228,7 @@ export class PrintingService {
       { accion: 'text', datos: this.composeColumns('', 'Cambio', `$ ${session.changeAmount.toLocaleString('es-CO')}`) },
       { accion: 'text', datos: this.separator() },
       { accion: 'text', datos: `Vehiculo: ${vehicleType}` },
+      { accion: 'text', datos: `Placa: ${vehiclePlate ?? 'Sin placa'}` },
       { accion: 'text', datos: `Tarifa: ${tariffName}` },
       { accion: 'text', datos: `Sesion PPE: ${receiptIdentifier}` },
       { accion: 'feed', datos: '3' },
@@ -207,6 +236,143 @@ export class PrintingService {
     ];
 
     return this.sendToPrinter(operations);
+  }
+
+  // Misma informacion y orden que la factura de la caja del servidor
+  // (frontend: app/libs/Printer.ts, imprimirFacturaTransaccion).
+  private buildInvoiceOperations(
+    invoice: PaymentInvoice,
+    extra: {
+      plate: string | null;
+      startedAt: string | null;
+      monthlyStartAt: string | null;
+      monthlyEndAt: string | null;
+    },
+  ): PrinterOperation[] {
+    const header = invoice.header ?? {};
+    const totals = invoice.descriptionTotal?.[0] ?? {};
+    const plate = header.PLACA?.trim() || extra.plate || 'Sin placa';
+    const text = (datos: string): PrinterOperation => ({ accion: 'text', datos });
+    const amountRow = (label: string, value: number | string | undefined) =>
+      text(this.composeColumns(label, '', this.formatAmount(value ?? 0)));
+
+    const operations: PrinterOperation[] = [
+      { accion: 'textalign', datos: 'center' },
+      text(invoice.empresa ?? ''),
+      text(`NIT: ${invoice.nit ?? ''}`),
+      text(invoice.direccion ?? ''),
+      text(this.separator()),
+      { accion: 'textalign', datos: 'left' },
+      text(`FACTURA ELECTRONICA DE VENTA: ${header.FACTURA_ELECTRONICA_DE_VENTA ?? ''}`),
+      text(`FECHA DE VENTA: ${header.FECHA_DE_VENTA ?? ''}`),
+      text(`REGIMEN: ${header.REGIMEN ?? ''}`),
+      text(`Cliente: ${header.CLIENTE ?? ''}`),
+      text(`CC/NIT: ${header.NIT ?? ''}`),
+      text(`FORMA DE PAGO: ${header.FORMA_DE_PAGO ?? 'Contado'}`),
+      text(`MEDIO DE PAGO: ${header.MEDIO_DE_PAGO ?? 'Efectivo'}`),
+      text(`PLACA: ${plate}`),
+    ];
+
+    if (header.FECHA_FIN_MENSUALIDAD || (extra.monthlyStartAt && extra.monthlyEndAt)) {
+      operations.push(
+        text(
+          `INICIO MENSUALIDAD: ${header.FECHA_INICIO_MENSUALIDAD || this.formatDateValue(extra.monthlyStartAt)}`,
+        ),
+        text(
+          `FIN MENSUALIDAD: ${header.FECHA_FIN_MENSUALIDAD || this.formatDateValue(extra.monthlyEndAt)}`,
+        ),
+      );
+      if (header.TIEMPO_PAGADO_MENSUALIDAD) {
+        operations.push(text(`TIEMPO PAGADO: ${header.TIEMPO_PAGADO_MENSUALIDAD}`));
+      }
+    } else {
+      // La fecha de ingreso real la trae la sesion de la PPE (la del backend
+      // puede venir con la hora de la venta).
+      operations.push(
+        text(
+          `FECHA DE INGRESO: ${
+            extra.startedAt ? this.formatDateValue(extra.startedAt) : (header.FECHA_DE_INGRESO ?? '')
+          }`,
+        ),
+        text(`DURACION: ${header.DURACION ?? ''}`),
+      );
+    }
+
+    operations.push(
+      text(`PUNTO DE PAGO: ${header.PUNTO_DE_PAGO ?? ''}`),
+      text(this.separator()),
+      text(this.headerRow()),
+    );
+
+    for (const line of invoice.description ?? []) {
+      operations.push(
+        text(
+          this.dataRow(
+            String(line.DESCRIPCION ?? ''),
+            String(line.CANTIDAD ?? ''),
+            this.formatAmount(line.VALOR ?? 0),
+          ),
+        ),
+      );
+    }
+
+    operations.push(
+      text(this.separator()),
+      text(this.composeColumns('Cantidad Total:', '', String(totals.CANTIDAD_TOTAL ?? 0))),
+      amountRow('Base:', totals.BASE),
+      amountRow('Descuento:', totals.DESCUENTO),
+      amountRow('Subtotal:', totals.SUBTOTAL),
+      amountRow('IVA 19%:', totals.IVA_19),
+      amountRow('Total:', totals.TOTAL),
+      amountRow('Recibido:', totals.RECIBIDO),
+      amountRow('Cambio:', totals.CAMBIO),
+      text(this.separator()),
+    );
+
+    // CUFE (con QR de consulta en la DIAN) y resolucion
+    const cufe = invoice.infoCufe?.CUFE;
+    if (cufe) {
+      operations.push(
+        { accion: 'textalign', datos: 'center' },
+        {
+          accion: 'qr',
+          datos: `https://catalogo-vpfe.dian.gov.co/document/searchqr?documentkey=${cufe}`,
+        },
+        { accion: 'textalign', datos: 'left' },
+      );
+    }
+    operations.push(text(`CUFE: ${cufe || 'no disponible'}`), { accion: 'feed', datos: '1' });
+
+    for (const line of this.cleanLines(invoice.infoResolution)) {
+      operations.push(text(line));
+    }
+    operations.push(
+      text(`FABRICANTE DE SOFTWARE: ${invoice.infoSoftwareManufacturer ?? ''}`),
+      { accion: 'feed', datos: '1' },
+      text(`PROVEEDOR TECNOLOGICO: ${invoice.infoTechnologyProvider ?? ''}`),
+      { accion: 'feed', datos: '1' },
+    );
+
+    // "Numero de poliza Numero de Poliza AXA ... vigencia ... al ..." +
+    // "Vigencia hasta ...": una sola linea con la poliza y su vigencia.
+    const policy = this.cleanLines(invoice.infoPolice)[0] ?? '';
+    if (policy) {
+      operations.push(
+        text(policy.replace(/^n[uú]mero de p[oó]liza\s+(?=n[uú]mero de p[oó]liza)/i, '')),
+      );
+    }
+
+    operations.push({ accion: 'feed', datos: '3' }, { accion: 'cut', datos: 'full' });
+    return operations;
+  }
+
+  // Lineas sin espacios sobrantes (el backend arma estos textos con saltos de
+  // linea y la sangria del codigo).
+  private cleanLines(value?: string | null): string[] {
+    return String(value ?? '')
+      .split(/\r?\n|\\n/)
+      .map((line) => line.replace(/\s+/g, ' ').trim())
+      .filter((line) => line.length > 0);
   }
 
   async printCashCloseout(closeoutId: number) {

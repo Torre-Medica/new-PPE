@@ -11,6 +11,7 @@ import {
   ValidateMonthlySubscriptionDto,
 } from '@modules/server-link/application/dto/monthly-subscription.dto';
 import { CompanyInfoSummary } from '@modules/server-link/application/dto/company-info.dto';
+import { PaymentInvoice } from '@modules/server-link/application/dto/payment-invoice.dto';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -275,6 +276,16 @@ export class NexoBackRestService {
         payDay: false,
       },
     });
+  }
+
+  // Factura del pago (GET /printForId de nexo_back, el id va en el header),
+  // la misma que imprime la caja del servidor.
+  async getPaymentInvoice(serverPaymentId: number): Promise<PaymentInvoice | null> {
+    const invoice = await this.requestJson<PaymentInvoice | null>('/printForId', {
+      auth: true,
+      headers: { id: String(serverPaymentId) },
+    });
+    return invoice && typeof invoice === 'object' && invoice.header ? invoice : null;
   }
 
   async getCompanyInfo(): Promise<CompanyInfoSummary> {

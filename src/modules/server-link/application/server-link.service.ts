@@ -122,6 +122,10 @@ export class ServerLinkService implements OnModuleInit, OnModuleDestroy, ServerL
     return this.nexoBackRestService.getCompanyInfo();
   }
 
+  getPaymentInvoice(serverPaymentId: number) {
+    return this.nexoBackRestService.getPaymentInvoice(serverPaymentId);
+  }
+
   prepareMonthlySubscription(identificationCode: string) {
     return this.nexoBackRestService.prepareMonthlySubscription(identificationCode);
   }
