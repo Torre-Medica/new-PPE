@@ -605,7 +605,14 @@ export class PeripheralsService implements OnApplicationBootstrap {
       this.scheduleBoardReconnect();
     });
 
-    this.qrScanner.onQrCode((qrCode, rawCode) => {
+    this.qrScanner.onQrCode((scannedCode, rawCode) => {
+      // Algunos tiquetes traen el indicador ECI del QR ("\000026" = UTF-8) delante
+      // del codigo; el lector lo transmite tal cual y el servidor no encuentra el
+      // ingreso. Se quita: "\" + 6 digitos al inicio.
+      const qrCode = scannedCode.replace(/^\\\d{6}/, '');
+      if (qrCode !== scannedCode) {
+        this.logger.log(`QR con prefijo ECI ${scannedCode.slice(0, 7)} — se usa ${qrCode}`);
+      }
       const now = Date.now();
       if (
         this.lastAcceptedQrCode === qrCode &&
