@@ -73,7 +73,13 @@ describe('PaymentSessionService', () => {
       activateAcceptance: jest.fn(),
       deactivateAcceptance: jest.fn(),
       returnChange: jest.fn().mockResolvedValue([]),
-      returnChangeReliable: jest.fn().mockResolvedValue({ confirmedItems: [], unconfirmedItems: [] }),
+      returnChangeConfirmed: jest.fn().mockResolvedValue({
+        confirmed: true,
+        timedOut: false,
+        total: 0,
+        frameBytes: [0, 0, 0, 0],
+        commandHex: '',
+      }),
       decrementSlotQuantity: jest.fn(),
       getDispenserSlotConfig: jest.fn().mockResolvedValue({
         bill1: 1000,
@@ -482,10 +488,10 @@ describe('PaymentSessionService', () => {
     await expect(service.cancelSession('session-1')).rejects.toBeInstanceOf(
       PaymentSessionConflictError,
     );
-    expect(peripheralsService.returnChangeReliable).not.toHaveBeenCalled();
+    expect(peripheralsService.returnChangeConfirmed).not.toHaveBeenCalled();
   });
 
-  it('refunds inserted cash via returnChangeReliable (hardware-confirmed) when canceling', async () => {
+  it('refunds inserted cash with one full frame (hardware-confirmed) when canceling', async () => {
     const {
       service,
       paymentSessionRepository,
@@ -512,16 +518,17 @@ describe('PaymentSessionService', () => {
       remaining: 0,
       items: [{ denominationId: 1000, quantity: 5 }],
     });
-    peripheralsService.returnChangeReliable.mockResolvedValue({
-      confirmedItems: [
-        { slotKey: 'bill1', denomination: 1000, quantity: 5, confirmed: true, timedOut: false },
-      ],
-      unconfirmedItems: [],
+    peripheralsService.returnChangeConfirmed.mockResolvedValue({
+      confirmed: true,
+      timedOut: false,
+      total: 5000,
+      frameBytes: [1, 0, 0, 0],
+      commandHex: '',
     });
 
     await service.cancelSession('session-1');
 
-    expect(peripheralsService.returnChangeReliable).toHaveBeenCalledWith([
+    expect(peripheralsService.returnChangeConfirmed).toHaveBeenCalledWith([
       { slotKey: 'bill1', denomination: 1000, quantity: 5 },
     ]);
     expect(peripheralsService.returnChange).not.toHaveBeenCalled();
@@ -561,11 +568,12 @@ describe('PaymentSessionService', () => {
       remaining: 0,
       items: [{ denominationId: 1000, quantity: 5 }],
     });
-    peripheralsService.returnChangeReliable.mockResolvedValue({
-      confirmedItems: [],
-      unconfirmedItems: [
-        { slotKey: 'bill1', denomination: 1000, quantity: 5, confirmed: false, timedOut: true },
-      ],
+    peripheralsService.returnChangeConfirmed.mockResolvedValue({
+      confirmed: false,
+      timedOut: true,
+      total: 5000,
+      frameBytes: [1, 0, 0, 0],
+      commandHex: '',
     });
 
     await service.cancelSession('session-1');
@@ -892,7 +900,7 @@ describe('PaymentSessionService', () => {
         serverSyncStatus: ServerSyncStatus.Confirmed,
       },
     ]);
-    expect(peripheralsService.returnChangeReliable).not.toHaveBeenCalled();
+    expect(peripheralsService.returnChangeConfirmed).not.toHaveBeenCalled();
     expect(syncAttemptRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({
         paymentSessionId: 'session-2',

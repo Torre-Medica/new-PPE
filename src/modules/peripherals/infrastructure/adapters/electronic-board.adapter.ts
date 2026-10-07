@@ -1,13 +1,11 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Logger } from '@nestjs/common';
-import { RETURN_FRAME_BY_SLOT } from '@modules/peripherals/domain/electronic-board-frames';
 import {
   ChangeDispenserPort,
-  DispenseUnitsResult,
+  ReturnAckResult,
 } from '@modules/peripherals/domain/ports/change-dispenser.port';
 import { installVendorConsoleFilter } from '@modules/peripherals/infrastructure/vendor-console-filter';
-import { DispenserSlotKey } from '@modules/persistence/infrastructure/entities/dispenser-slot.entity';
 
 type LegacyElectronicBoard = {
   port?: {
@@ -199,24 +197,15 @@ export class ElectronicBoardAdapter implements ChangeDispenserPort {
     );
   }
 
-  dispenseUnits(
-    slotKey: DispenserSlotKey,
-    quantity: number,
+  returnWithAck(
+    frameBytes: [number, number, number, number],
+    total: number,
     ackTimeoutMs = 5000,
-  ): Promise<DispenseUnitsResult> {
-    const spec = RETURN_FRAME_BY_SLOT[slotKey];
-    if (quantity <= 0 || quantity > spec.maxUnitsPerOrder) {
-      throw new Error(
-        `Cantidad invalida para dispenseUnits(${slotKey}): ${quantity} (maximo ${spec.maxUnitsPerOrder} por orden)`,
-      );
-    }
-
-    const total = quantity * spec.unitMultiplier;
-
-    return new Promise<DispenseUnitsResult>((resolve) => {
+  ): Promise<ReturnAckResult> {
+    return new Promise<ReturnAckResult>((resolve) => {
       let settled = false;
 
-      const settle = (result: DispenseUnitsResult) => {
+      const settle = (result: ReturnAckResult) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -233,7 +222,7 @@ export class ElectronicBoardAdapter implements ChangeDispenserPort {
         settle({ success, timedOut: false });
 
       try {
-        this.returnRaw(spec.selector, total);
+        this.returnRaw(frameBytes, total);
       } catch {
         settle({ success: false, timedOut: false });
       }

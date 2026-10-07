@@ -621,22 +621,22 @@ export class CashInventoryService {
     const denominationId = slot.denominationId;
     const totalDispensed = denominationId * quantity;
 
-    // Trama aislada por slot (igual que returnChangeReliable en el flujo de pago real) —
-    // returnChange() arma una trama combinada con las 4 denominaciones actuales, lo que
-    // hace que el selector de canal sea el mismo sin importar el slot que se quiera
-    // probar. Para una prueba manual de un solo slot necesitamos la trama especifica de
-    // ese canal, no la combinada.
-    const { unconfirmedItems } = await this.peripheralsService.returnChangeReliable([
-      { slotKey: slot.slotKey, denomination: denominationId, quantity },
-    ]);
+    // Trama completa con las denominaciones reales de los 4 slots, una por unidad,
+    // con total = denominacion del slot (ver PeripheralsService.ejectUnits).
+    const ejection = await this.peripheralsService.ejectUnits(
+      slot.slotKey,
+      denominationId,
+      quantity,
+    );
 
-    if (unconfirmedItems.length > 0) {
+    if (!ejection.confirmed) {
       throw new BadRequestException(
-        `La placa no confirmo la expulsion de ${quantity} unidad(es) desde ${slotKey}`,
+        `La placa no confirmo la expulsion desde ${slotKey}: ` +
+        `${ejection.confirmedUnits} de ${quantity} unidad(es) confirmadas`,
       );
     }
 
-    // returnChangeReliable ya descuenta dispenser_slots por cada chunk confirmado —
+    // ejectUnits ya descuenta dispenser_slots por cada unidad expulsada —
     // aqui solo falta dejar el registro de auditoria del movimiento.
     await this.recordMovementOnly(
       {
@@ -1019,7 +1019,7 @@ export class CashInventoryService {
 
         const slotKey = typeof command.slotKey === 'string' ? command.slotKey : null;
         // Compatibilidad con historico: returnChange() (pre-devolucion confiable) guardaba
-        // "requestedDenomination"; returnChangeReliable() guarda "denomination".
+        // "requestedDenomination"; la devolucion por tramas fijas (ya retirada) guardaba "denomination".
         const denomination =
           typeof command.denomination === 'number'
             ? command.denomination

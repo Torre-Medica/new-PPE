@@ -1,6 +1,4 @@
-import { DispenserSlotKey } from '@modules/persistence/infrastructure/entities/dispenser-slot.entity';
-
-export interface DispenseUnitsResult {
+export interface ReturnAckResult {
   success: boolean;
   timedOut: boolean;
 }
@@ -20,15 +18,15 @@ export interface ChangeDispenserPort {
     coin2Denomination: number,
   ): void;
   /**
-   * Manda una trama RETURN aislada (tabla fija de docs/TRAMAS_DEVOLUCION_PLACA.md) para
-   * expulsar `quantity` unidades de un solo slot, y espera la confirmacion (ACK) de la
-   * placa antes de resolver.
+   * Manda una trama RETURN con las denominaciones reales de los 4 slots
+   * (`frameBytes`) y el `total` a devolver, y espera la confirmacion (ACK) de la
+   * placa antes de resolver. Ver docs/TRAMAS_DEVOLUCION_PLACA.md.
    */
-  dispenseUnits(
-    slotKey: DispenserSlotKey,
-    quantity: number,
+  returnWithAck(
+    frameBytes: [number, number, number, number],
+    total: number,
     ackTimeoutMs?: number,
-  ): Promise<DispenseUnitsResult>;
+  ): Promise<ReturnAckResult>;
   onCoinReceived(handler: (amount: string) => void): void;
   onBillReceived(handler: (amount: string) => void): void;
   onError(handler: (message: string) => void): void;

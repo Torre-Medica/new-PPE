@@ -36,21 +36,20 @@ export interface CollectorTestSample {
   receivedAt: string;
 }
 
-export interface ReliableReturnChunk {
-  slotKey: ReturnChangeItem['slotKey'];
-  denomination: number;
-  quantity: number;
+export interface ConfirmedReturnResult {
   confirmed: boolean;
   timedOut: boolean;
+  total: number;
+  frameBytes: [number, number, number, number];
+  commandHex: string;
 }
 
-export interface ReliableReturnResult {
-  confirmedItems: ReliableReturnChunk[];
-  unconfirmedItems: ReliableReturnChunk[];
+export interface EjectUnitsResult {
+  requested: number;
+  confirmedUnits: number;
+  confirmed: boolean;
 }
 
-type ReturnSlotKey = ReturnChangeItem['slotKey'];
-import { RETURN_FRAME_BY_SLOT } from '@modules/peripherals/domain/electronic-board-frames';
 import { BillAcceptorPort } from '@modules/peripherals/domain/ports/bill-acceptor.port';
 import { ChangeDispenserPort } from '@modules/peripherals/domain/ports/change-dispenser.port';
 import { QrScannerPort } from '@modules/peripherals/domain/ports/qr-scanner.port';
@@ -353,26 +352,14 @@ export class PeripheralsService implements OnApplicationBootstrap {
     const coin1Den = slotConfig.coin1 ?? 0;
     const coin2Den = slotConfig.coin2 ?? 0;
 
-    const totalToReturn = items.reduce(
-      (sum, item) => sum + item.denomination * item.quantity,
-      0,
-    );
-
-    // bytes 4-7 del protocolo: denominación del slot / unidad de escala
-    const frameBytes: [number, number, number, number] = [
-      bill1Den / 1000,
-      bill2Den / 1000,
-      coin1Den / 10,
-      coin2Den / 10,
-    ];
+    const totalToReturn = this.sumItems(items);
+    const frameBytes = this.toReturnFrame(slotConfig);
 
     this.electronicBoard.activate();
     await new Promise<void>((r) => setTimeout(r, 300));
 
     const commandBytes = this.electronicBoard.buildReturnRawCommand(frameBytes, totalToReturn);
-    const commandHex = commandBytes
-      .map((v) => v.toString(16).padStart(2, '0').toUpperCase())
-      .join(' ');
+    const commandHex = this.toHex(commandBytes);
 
     this.logger.log(
       `[RETURN] total=${totalToReturn} slots=[bill1=${bill1Den},bill2=${bill2Den},coin1=${coin1Den},coin2=${coin2Den}]` +
@@ -382,7 +369,7 @@ export class PeripheralsService implements OnApplicationBootstrap {
     this.electronicBoard.returnChange(totalToReturn, bill1Den, bill2Den, coin1Den, coin2Den);
 
     // Este metodo manda UN solo trama con el total — no hay ACK por denominacion
-    // individual que confirmar (a diferencia de returnChangeReliable). Se descuenta
+    // individual que confirmar (ver returnChangeConfirmed). Se descuenta
     // el inventario de cada slot de una vez, confiando en que la placa reparte el
     // total como se le indico. El numero que realmente importa para el cuadre de
     // caja es el total de dinero en tolvas (ver changeInventoryTotal en el
@@ -402,13 +389,7 @@ export class PeripheralsService implements OnApplicationBootstrap {
     }
 
     // Espera proporcional al número de unidades físicas a dispensar
-    const totalUnits = items.reduce((sum, item) => sum + item.quantity, 0);
-    const hasBills = items.some((i) => i.slotKey === 'bill1' || i.slotKey === 'bill2');
-    const waitMs = hasBills
-      ? totalUnits * 2500 + 1000
-      : totalUnits * 800 + 500;
-
-    await new Promise<void>((r) => setTimeout(r, waitMs));
+    await new Promise<void>((r) => setTimeout(r, this.dispenseWaitMs(items)));
 
     // Desactivar la placa después de dispensar — nunca debe quedar activa sin sesión
     this.electronicBoard.deactivate();
@@ -426,178 +407,116 @@ export class PeripheralsService implements OnApplicationBootstrap {
   }
 
   /**
-   * Devolucion confiable: una trama RETURN aislada por denominacion (tabla fija de
-   * docs/TRAMAS_DEVOLUCION_PLACA.md), en orden secuencial, esperando siempre la
-   * confirmacion (ACK) de la placa antes de mandar la siguiente. Mas lenta que
-   * returnChange(), pero elimina la ambiguedad de que canal fisico uso la placa para
-   * repartir un total mezclado.
+   * Devolucion con confirmacion de la placa: UNA trama RETURN con las
+   * denominaciones reales de los 4 slots (dispenser_slots) y el total a devolver,
+   * igual que returnChange(), pero esperando el ACK de la placa. La placa decide
+   * como repartir el total con lo que le decimos que hay en cada caja — por eso
+   * nunca se le manda una denominacion que no corresponda a lo cargado.
    *
-   * El propio docs/TRAMAS_DEVOLUCION_PLACA.md admite que "el ACK no garantiza por si
-   * solo la expulsion fisica" — es decir, la ausencia de ACK no prueba que la moneda
-   * no haya salido. Por eso un ACK perdido AISLADO no debe dejar al cliente sin el
-   * resto del cambio: se reintenta una vez, y si sigue sin confirmar se asume que
-   * probablemente si se expulso (se descuenta el inventario igual) y se registra
-   * como incidente para revision manual, mientras la secuencia continua con el
-   * resto de las denominaciones. Solo se corta la secuencia completa ante fallos
-   * consecutivos, que si son una señal real de que la placa dejo de responder.
+   * Nunca se reintenta: un ACK perdido no prueba que el dinero no haya salido, y
+   * reenviar una trama de total podria devolverlo dos veces. Si no hay ACK
+   * (timeout) se asume que probablemente si salio y se descuenta el inventario;
+   * si la placa responde fallo explicito, o el puerto no esta abierto, no se
+   * descuenta. En ambos casos el llamador recibe confirmed=false para alertar.
    */
-  async returnChangeReliable(items: ReturnChangeItem[]): Promise<ReliableReturnResult> {
-    if (items.length === 0) return { confirmedItems: [], unconfirmedItems: [] };
+  async returnChangeConfirmed(items: ReturnChangeItem[]): Promise<ConfirmedReturnResult> {
+    const slotConfig = await this.dispenserSlotService.getSlotConfig();
+    const frameBytes = this.toReturnFrame(slotConfig);
+    const total = this.sumItems(items);
 
-    const chunks: ReliableReturnChunk[] = [];
-    for (const item of items) {
-      const spec = RETURN_FRAME_BY_SLOT[item.slotKey];
-      let remaining = item.quantity;
-      while (remaining > 0) {
-        const quantity = Math.min(remaining, spec.maxUnitsPerOrder);
-        chunks.push({
-          slotKey: item.slotKey,
-          denomination: item.denomination,
-          quantity,
-          confirmed: false,
-          timedOut: false,
-        });
-        remaining -= quantity;
-      }
+    if (items.length === 0 || total <= 0) {
+      return { confirmed: true, timedOut: false, total: 0, frameBytes, commandHex: '' };
     }
 
-    const confirmedItems: ReliableReturnChunk[] = [];
-    const unconfirmedItems: ReliableReturnChunk[] = [];
+    const commandHex = this.toHex(this.electronicBoard.buildReturnRawCommand(frameBytes, total));
+    this.logger.log(
+      `[RETURN][ACK] total=${total} slots=[bill1=${slotConfig.bill1 ?? 0},bill2=${slotConfig.bill2 ?? 0},` +
+      `coin1=${slotConfig.coin1 ?? 0},coin2=${slotConfig.coin2 ?? 0}] command=${commandHex}`,
+    );
 
-    // Todo el ciclo de activate()/deactivate() va en try/finally: si CUALQUIER
-    // cosa lanza aqui adentro (incluyendo un fallo de decrementSlotQuantity por
-    // inventario insuficiente — una condicion real y esperable, no un error de
-    // hardware), la placa NO debe quedar armada indefinidamente. Antes, una
-    // excepcion a mitad del ciclo saltaba directo por encima de deactivate().
     this.electronicBoard.activate();
     try {
       await new Promise<void>((r) => setTimeout(r, 300));
 
-      const MAX_CONSECUTIVE_FAILURES = 2;
-      let consecutiveFailures = 0;
-      let stopped = false;
+      const result = await this.electronicBoard.returnWithAck(frameBytes, total);
 
-      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
-        const chunk = chunks[chunkIndex];
-        if (stopped) {
-          unconfirmedItems.push(chunk);
-          continue;
-        }
-
-        this.logger.log(
-          `[RETURN][RELIABLE] slot=${chunk.slotKey} denominacion=${chunk.denomination} cantidad=${chunk.quantity}`,
-        );
-
-        let result = await this.electronicBoard.dispenseUnits(chunk.slotKey, chunk.quantity);
-
-        if (!result.success) {
-          this.logger.warn(
-            `[RETURN][RELIABLE] sin confirmacion en primer intento — slot=${chunk.slotKey} ` +
-            `cantidad=${chunk.quantity} timedOut=${result.timedOut} — reintentando una vez`,
-          );
-
-          // El protocolo de la placa no incluye ningun identificador en el ACK —
-          // es solo un si/no, sin decir a que comando responde. Si el timeout se
-          // debio a que la placa era simplemente lenta (no que dejo de
-          // responder), su ACK real podria llegar tarde, DESPUES de que ya
-          // registramos el resolver del reintento — y quedaria atribuido al
-          // comando equivocado. Esta pausa le da tiempo a un ACK tardio de
-          // "drenar" mientras no hay ningun resolver pendiente al que pegarle.
-          await new Promise<void>((r) => setTimeout(r, 500));
-
-          result = await this.electronicBoard.dispenseUnits(chunk.slotKey, chunk.quantity);
-        }
-
-        // El descuento de inventario puede fallar por una razon de negocio real
-        // (otra operacion concurrente — carga/descarga manual, otro chunk — ya
-        // dejo el slot sin unidades suficientes), no solo por un problema de
-        // hardware. Se aisla en su propio try/catch: si falla, se registra como
-        // incidente y se continua con el resto del cambio en vez de abortar
-        // todo el ciclo (y dejar la placa sin desactivar) por una condicion que
-        // ya deberiamos poder anticipar y manejar con gracia.
-        let decremented = false;
-        try {
-          await this.decrementSlotQuantity(chunk.slotKey, chunk.quantity);
-          decremented = true;
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : 'Error desconocido';
-          this.logger.error(
-            `[RETURN][RELIABLE] no se pudo descontar inventario de slot=${chunk.slotKey} ` +
-            `cantidad=${chunk.quantity}: ${detail} — se registra como incidente y se continua`,
-          );
-        }
-
-        if (result.success) {
-          chunk.confirmed = true;
-          consecutiveFailures = 0;
-          confirmedItems.push(chunk);
-
-          // Hipotesis en prueba: el mecanismo de billetes (bill1/bill2 comparten
-          // el mismo motor/presentador fisico) podria no aceptar una orden nueva
-          // mientras el mecanismo todavia esta asentando la anterior — la placa
-          // ACKea "exito" igual, pero el billete no llega a salir. Las monedas
-          // usan un mecanismo distinto e independiente, donde esto nunca se ha
-          // observado. Por eso el piso de 4s aplica a CUALQUIER transicion que
-          // involucre un billete de un lado o del otro (moneda->billete,
-          // billete->moneda, billete->billete); moneda->moneda no lo necesita y
-          // se deja con su espera de asentamiento original.
-          //
-          // Nota: esto no cubre el caso de un billete fallando como PRIMER y
-          // UNICO comando de toda la secuencia (sin nada antes) — ahi no hay
-          // transicion previa a la que ponerle margen, asi que si la falla
-          // persiste en ese escenario especifico apunta a algo mecanico, no de
-          // tiempos.
-          const isBill = chunk.slotKey === 'bill1' || chunk.slotKey === 'bill2';
-          const nextChunk = chunks[chunkIndex + 1];
-          const nextIsBill =
-            !!nextChunk && (nextChunk.slotKey === 'bill1' || nextChunk.slotKey === 'bill2');
-
-          let waitMs: number;
-          if (isBill || nextIsBill) {
-            waitMs = Math.max(4000, isBill ? chunk.quantity * 2500 : 0);
-          } else {
-            waitMs = chunk.quantity * 800;
-          }
-          await new Promise<void>((r) => setTimeout(r, waitMs));
-        } else {
-          chunk.timedOut = result.timedOut;
-          consecutiveFailures += 1;
-          unconfirmedItems.push(chunk);
-
-          if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      if (result.success || result.timedOut) {
+        for (const item of items) {
+          try {
+            await this.decrementSlotQuantity(item.slotKey, item.quantity);
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : 'Error desconocido';
             this.logger.error(
-              `[RETURN][RELIABLE] ${consecutiveFailures} fallos de confirmacion consecutivos — ` +
-              `se detiene la secuencia, la placa probablemente dejo de responder`,
+              `[RETURN][ACK] no se pudo descontar inventario de slot=${item.slotKey} ` +
+              `cantidad=${item.quantity}: ${detail} — verificar en el proximo conteo fisico`,
             );
-            stopped = true;
-          } else {
-            this.logger.warn(
-              `[RETURN][RELIABLE] sin confirmacion tras reintento — slot=${chunk.slotKey} ` +
-              `cantidad=${chunk.quantity} — continuando con el resto del cambio`,
-            );
-            // Mismo colchon que en el reintento: si vamos a mandar el siguiente
-            // chunk, dejamos que un ACK tardio de este ya drene primero.
-            await new Promise<void>((r) => setTimeout(r, 500));
           }
-        }
-
-        if (!decremented) {
-          // El chunk ya quedo clasificado en confirmedItems/unconfirmedItems segun
-          // la confirmacion de hardware (arriba) — eso es lo que le importa al
-          // llamador para saber si el cliente recibio su dinero. El fallo de
-          // inventario ya quedo registrado en el log de error de arriba para
-          // revision manual, sin reclasificar ni duplicar el chunk entre listas.
-          this.logger.warn(
-            `[RETURN][RELIABLE] slot=${chunk.slotKey} quedo con inventario desincronizado ` +
-            `tras este chunk — verificar en el proximo conteo fisico`,
-          );
         }
       }
+
+      if (!result.success) {
+        this.logger.warn(
+          `[RETURN][ACK] la placa no confirmo la devolucion de $${total.toLocaleString('es-CO')} ` +
+          `(timedOut=${result.timedOut})`,
+        );
+      } else {
+        await new Promise<void>((r) => setTimeout(r, this.dispenseWaitMs(items)));
+      }
+
+      return { confirmed: result.success, timedOut: result.timedOut, total, frameBytes, commandHex };
     } finally {
       this.electronicBoard.deactivate();
     }
+  }
 
-    return { confirmedItems, unconfirmedItems };
+  /**
+   * Expulsion manual de unidades de un slot (boton "Expulsar" de la vista
+   * Dispositivos). Se manda una trama completa POR UNIDAD con total = la
+   * denominacion del slot: con un total mayor (ej. 5 x $100 = $500) la placa
+   * podria repartirlo desde otra caja (1 moneda de $500), y la prueba dejaria de
+   * apuntar al slot elegido. Se detiene en la primera unidad sin confirmar.
+   */
+  async ejectUnits(
+    slotKey: ReturnChangeItem['slotKey'],
+    denomination: number,
+    quantity: number,
+  ): Promise<EjectUnitsResult> {
+    let confirmedUnits = 0;
+
+    for (let unit = 0; unit < quantity; unit += 1) {
+      const result = await this.returnChangeConfirmed([{ slotKey, denomination, quantity: 1 }]);
+      if (!result.confirmed) {
+        break;
+      }
+      confirmedUnits += 1;
+    }
+
+    return { requested: quantity, confirmedUnits, confirmed: confirmedUnits === quantity };
+  }
+
+  // bytes 4-7 del protocolo: denominacion real de cada slot / unidad de escala
+  // (billetes /1000, monedas /10). Slot inactivo o sin denominacion = 0.
+  private toReturnFrame(slotConfig: DispenserSlotConfig): [number, number, number, number] {
+    return [
+      (slotConfig.bill1 ?? 0) / 1000,
+      (slotConfig.bill2 ?? 0) / 1000,
+      (slotConfig.coin1 ?? 0) / 10,
+      (slotConfig.coin2 ?? 0) / 10,
+    ];
+  }
+
+  private sumItems(items: ReturnChangeItem[]): number {
+    return items.reduce((sum, item) => sum + item.denomination * item.quantity, 0);
+  }
+
+  private dispenseWaitMs(items: ReturnChangeItem[]): number {
+    const totalUnits = items.reduce((sum, item) => sum + item.quantity, 0);
+    const hasBills = items.some((i) => i.slotKey === 'bill1' || i.slotKey === 'bill2');
+    return hasBills ? totalUnits * 2500 + 1000 : totalUnits * 800 + 500;
+  }
+
+  private toHex(bytes: number[]): string {
+    return bytes.map((v) => v.toString(16).padStart(2, '0').toUpperCase()).join(' ');
   }
 
   async disconnectAll(): Promise<void> {

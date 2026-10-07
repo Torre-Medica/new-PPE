@@ -1,10 +1,8 @@
 import { Logger } from '@nestjs/common';
-import { RETURN_FRAME_BY_SLOT } from '@modules/peripherals/domain/electronic-board-frames';
 import {
   ChangeDispenserPort,
-  DispenseUnitsResult,
+  ReturnAckResult,
 } from '@modules/peripherals/domain/ports/change-dispenser.port';
-import { DispenserSlotKey } from '@modules/persistence/infrastructure/entities/dispenser-slot.entity';
 
 export class SimulatedElectronicBoardAdapter implements ChangeDispenserPort {
   private readonly logger = new Logger('SimulatedElectronicBoardAdapter');
@@ -57,15 +55,9 @@ export class SimulatedElectronicBoardAdapter implements ChangeDispenserPort {
     );
   }
 
-  dispenseUnits(slotKey: DispenserSlotKey, quantity: number): Promise<DispenseUnitsResult> {
-    const spec = RETURN_FRAME_BY_SLOT[slotKey];
-    if (quantity <= 0 || quantity > spec.maxUnitsPerOrder) {
-      throw new Error(
-        `Cantidad invalida para dispenseUnits(${slotKey}): ${quantity} (maximo ${spec.maxUnitsPerOrder} por orden)`,
-      );
-    }
-
-    this.logger.log(`[SIMULADO] dispenseUnits slot=${slotKey} cantidad=${quantity} -> ACK inmediato`);
+  returnWithAck(frameBytes: [number, number, number, number], total: number): Promise<ReturnAckResult> {
+    this.returnRaw(frameBytes, total);
+    this.logger.log(`[SIMULADO] returnWithAck total=${total} -> ACK inmediato`);
     return Promise.resolve({ success: true, timedOut: false });
   }
 

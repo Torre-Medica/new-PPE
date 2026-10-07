@@ -1094,9 +1094,8 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
 
       // returnChange() manda un solo trama con el total y las 4 denominaciones —
       // la placa reparte internamente. No hay ACK por denominacion individual que
-      // confirmar (a diferencia de returnChangeReliable, que quedo reservado para
-      // el boton de prueba "Expulsar", donde si necesitamos apuntar a un solo
-      // slot sin ambiguedad). El numero que se cuadra de verdad es el total de
+      // confirmar (la devolucion por cancelacion/timeout usa returnChangeConfirmed,
+      // que manda la misma trama pero espera el ACK). El numero que se cuadra de verdad es el total de
       // dinero en tolvas (changeInventoryTotal), ajustado por el operador en cada
       // cierre contra el conteo fisico — no el desglose exacto por denominacion.
       const commandAudit = await this.peripheralsService.returnChange(returnItems);
@@ -2488,46 +2487,37 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
           quantity: item.quantity,
         }));
 
-      // returnChange() manda un solo trama con el total y las 4 denominaciones —
-      // ver el comentario equivalente en el flujo de cambio automatico mas arriba
-      // en este archivo.
-      // Devolucion sin testigo: a diferencia del cambio automatico al completar
-      // un pago (donde el cliente esta parado frente a la maquina y notaria de
-      // inmediato si no le sale el cambio), en TIMEOUT/CANCEL no hay nadie
-      // verificando que el efectivo salio fisicamente. Por eso aqui se usa
-      // returnChangeReliable() (ACK por denominacion, con reintento) en vez de
-      // returnChange() (una sola trama, sin confirmacion de hardware alguna) —
-      // para que una falla de expulsion quede detectada y alertada en vez de
-      // asumida como exitosa.
-      const { confirmedItems, unconfirmedItems } =
-        await this.peripheralsService.returnChangeReliable(returnItems);
+      // Igual que el cambio de un pago completado: una sola trama con las 4
+      // denominaciones reales cargadas y el total a devolver (lo ingresado por el
+      // cliente, menos un remanente no representable si lo hay) — la placa reparte
+      // con lo que de verdad hay en las cajas. Como en TIMEOUT/CANCEL nadie esta
+      // verificando que el efectivo salio, se espera el ACK de la placa para que
+      // una falla quede alertada en vez de asumida como exitosa.
+      const refundResult = await this.peripheralsService.returnChangeConfirmed(returnItems);
       // Garantizar que billetero y placa queden desactivados tras dispensar
       this.peripheralsService.deactivateAcceptance();
       this.syncCashInventoryToNexoBack();
 
-      const confirmedAmount = confirmedItems.reduce(
-        (sum, item) => sum + item.denomination * item.quantity,
-        0,
-      );
-
       await this.appendEvent(session.id, 'payment.refunded', session.insertedAmount, {
         insertedAmount: session.insertedAmount,
         refundPlan: refundPlan.items,
-        confirmedItems,
-        unconfirmedItems,
+        refundTotal: refundResult.total,
+        confirmed: refundResult.confirmed,
+        timedOut: refundResult.timedOut,
+        commandHex: refundResult.commandHex,
         context,
       });
 
-      if (unconfirmedItems.length > 0) {
+      if (!refundResult.confirmed) {
         this.logger.error(
-          `[${context}][DEVOLUCION] La placa no confirmo la expulsion de ` +
-          `${unconfirmedItems.map((i) => `${i.quantity}x$${i.denomination.toLocaleString('es-CO')}`).join(', ')}` +
+          `[${context}][DEVOLUCION] La placa no confirmo la devolucion de ` +
+          `$${refundResult.total.toLocaleString('es-CO')} COP` +
           ` (de $${session.insertedAmount.toLocaleString('es-CO')} COP) | Sesion: ${session.id}. REQUIERE ATENCION MANUAL.`,
         );
         await this.appendEvent(session.id, 'payment.refund-unconfirmed', session.insertedAmount, {
           insertedAmount: session.insertedAmount,
-          confirmedAmount,
-          unconfirmedItems,
+          refundTotal: refundResult.total,
+          timedOut: refundResult.timedOut,
           alert: 'REQUIERE DEVOLUCION MANUAL',
           context,
         });
@@ -2539,10 +2529,11 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       }
 
       this.logger.log(
-        `[${context}][DEVOLUCION] Devueltos $${confirmedAmount.toLocaleString('es-CO')} COP` +
+        `[${context}][DEVOLUCION] Enviados $${refundResult.total.toLocaleString('es-CO')} COP` +
         ` de $${session.insertedAmount.toLocaleString('es-CO')} COP` +
+        ` (confirmado=${refundResult.confirmed})` +
         ` | Sesion: ${session.id}` +
-        ` | Plan: ${confirmedItems.map((i) => `${i.quantity}x$${i.denomination.toLocaleString('es-CO')}`).join(', ')}`,
+        ` | Plan: ${refundPlan.items.map((i) => `${i.quantity}x$${i.denominationId.toLocaleString('es-CO')}`).join(', ')}`,
       );
     } catch (error) {
       this.logger.error(
