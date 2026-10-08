@@ -68,6 +68,9 @@ const BOGOTA_TIME_ZONE = 'America/Bogota';
 const ADMIN_SESSION_KEY = 'ppe-admin-session';
 const SERVER_LINK_DISCONNECTED_BY = 'server-link-disconnected';
 const SERVER_LINK_MAINTENANCE_REASON = 'Sin conexion con nexo_back';
+// El backend manda kiosk.heartbeat cada 10 s por el SSE.
+const SSE_RECONNECT_DELAY_MS = 3_000;
+const SSE_SILENCE_LIMIT_MS = 30_000;
 
 const SLOT_LABELS: Record<string, string> = {
   bill1: 'Billetero #1',
@@ -448,307 +451,354 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const eventSource = (
-      SIMULATE ? getSimEventSource() : new EventSource('/api/kiosk/events')
-    ) as unknown as EventSource;
+    // La conexion SSE se recrea si se cae: si el backend se reinicia, el
+    // EventSource puede quedar cerrado para siempre (el proxy de vite responde
+    // error al reintento) o colgado sin recibir nada. Sin esto el kiosko seguia
+    // operando por el sondeo de active-session pero nunca recibia
+    // session.completed, y no mostraba la pantalla de pago exitoso ni imprimia.
+    let disposed = false;
+    let eventSource: EventSource;
+    let reconnectTimer: number | null = null;
+    let lastMessageAt = Date.now();
 
-    eventSource.addEventListener('qr.processing', () => {
-      setPaymentStage('scanning');
-      setStatusMessage('Validando lectura con el servidor...');
-    });
+    const scheduleReconnect = () => {
+      if (SIMULATE || disposed || reconnectTimer !== null) return;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        if (disposed) return;
+        eventSource.close();
+        connect();
+      }, SSE_RECONNECT_DELAY_MS);
+    };
 
-    eventSource.addEventListener('qr.ignored', (event) => {
-      // El backend emite esto tambien cuando el QR/cedula reescaneado se
-      // rechaza SOLO porque ya hay una sesion activa en curso (ver
-      // handleQrScannedEvent) — un reescaneo mientras se muestra la pantalla
-      // de pago (mensualidad u otro) no debe reiniciarla ni cortarle su
-      // tiempo de espera; la sesion vigente sigue intacta en el backend.
-      if (paymentStageRef.current !== 'idle' && paymentStageRef.current !== 'scanning') {
-        return;
-      }
+    const connect = () => {
+      eventSource = (
+        SIMULATE ? getSimEventSource() : new EventSource('/api/kiosk/events')
+      ) as unknown as EventSource;
+      lastMessageAt = Date.now();
 
-      const payload = parseEventPayload(event);
-      setPaymentStage('idle');
-      setPaymentDetails(demoPayment);
-      resetBillingFlow();
-      resetMonthlyFlow();
-      setStatusMessage(
-        typeof payload?.reason === 'string'
-          ? payload.reason
-          : 'Escanee su QR para iniciar el pago',
-      );
-    });
+      eventSource.addEventListener('kiosk.heartbeat', () => {
+        lastMessageAt = Date.now();
+      });
 
-    eventSource.addEventListener('session.review-ready', (event) => {
-      const payload = parseEventPayload(event);
-      if (!payload) {
-        return;
-      }
+      eventSource.addEventListener('qr.processing', () => {
+        setPaymentStage('scanning');
+        setStatusMessage('Validando lectura con el servidor...');
+      });
 
-      setRootMode('payment');
-      setPaymentStage('review');
-      resetBillingFlow();
-      const monthlySubscription = parseMonthlySubscription(payload.monthlySubscription);
-      const sessionType =
-        asString(payload.sessionType) === 'MONTHLY_SUBSCRIPTION' ||
-          monthlySubscription
-          ? 'MONTHLY_SUBSCRIPTION'
-          : 'VISITOR';
-      setShowBillingChoiceScreen(
-        electronicBillingEnabledRef.current && sessionType !== 'MONTHLY_SUBSCRIPTION',
-      );
-      if (sessionType === 'MONTHLY_SUBSCRIPTION') {
-        setMonthlyPlate(
-          monthlySubscription?.plate ??
-            asString(payload.vehiclePlate) ??
-            '',
-        );
-        setShowBillingDetailsScreen(false);
-      } else {
+      eventSource.addEventListener('qr.ignored', (event) => {
+        // El backend emite esto tambien cuando el QR/cedula reescaneado se
+        // rechaza SOLO porque ya hay una sesion activa en curso (ver
+        // handleQrScannedEvent) — un reescaneo mientras se muestra la pantalla
+        // de pago (mensualidad u otro) no debe reiniciarla ni cortarle su
+        // tiempo de espera; la sesion vigente sigue intacta en el backend.
+        if (paymentStageRef.current !== 'idle' && paymentStageRef.current !== 'scanning') {
+          return;
+        }
+
+        const payload = parseEventPayload(event);
+        setPaymentStage('idle');
+        setPaymentDetails(demoPayment);
+        resetBillingFlow();
         resetMonthlyFlow();
-      }
-      setPaymentDetails((current: PaymentDetails) => ({
-        ...current,
-        paymentSessionId: asString(payload.paymentSessionId),
-        sessionType,
-        identifierLabel: asString(payload.identifierLabel) === 'Cedula' ? 'Cedula' : 'UUID',
-        identifierValue: asString(payload.identifierValue),
-        amountDue: asNumber(payload.targetAmount),
-        enteredAt: formatBackendDate(asString(payload.enteredAt)),
-        insertedAmount: 0,
-        insertedItems: [],
-        changeAmount: 0,
-        concept: asString(payload.concept),
-        vehiclePlate: asString(payload.vehiclePlate) || null,
-        status: 'VALIDATED',
-        acceptancePolicy: parseAcceptancePolicy(payload.acceptancePolicy),
-        monthlySubscription,
-      }));
-      setStatusMessage(
-        sessionType === 'MONTHLY_SUBSCRIPTION'
-          ? 'Mensualidad validada. Revise el valor a cobrar'
-          : 'QR validado. Revise el valor a cobrar',
-      );
-    });
+        setStatusMessage(
+          typeof payload?.reason === 'string'
+            ? payload.reason
+            : 'Escanee su QR para iniciar el pago',
+        );
+      });
 
-    eventSource.addEventListener('session.collecting-enabled', (event) => {
-      const payload = parseEventPayload(event);
-      if (!payload) {
-        return;
-      }
+      eventSource.addEventListener('session.review-ready', (event) => {
+        const payload = parseEventPayload(event);
+        if (!payload) {
+          return;
+        }
 
-      if (paymentLoadingTimerRef.current !== null) {
-        window.clearTimeout(paymentLoadingTimerRef.current);
-        paymentLoadingTimerRef.current = null;
-      }
-      setPaymentLoading(false);
-      setPaymentStage('collecting');
-      setPaymentDetails((current: PaymentDetails) => ({
-        ...current,
-        paymentSessionId: asString(payload.paymentSessionId) || current.paymentSessionId,
-        insertedAmount: asNumber(payload.insertedAmount),
-        amountDue: asNumber(payload.targetAmount) || current.amountDue,
-        status: 'LISTENING_CASH',
-        acceptancePolicy: parseAcceptancePolicy(payload.acceptancePolicy),
-      }));
-      // setStatusMessage('Recepcion de efectivo habilitada');
-    });
+        setRootMode('payment');
+        setPaymentStage('review');
+        resetBillingFlow();
+        const monthlySubscription = parseMonthlySubscription(payload.monthlySubscription);
+        const sessionType =
+          asString(payload.sessionType) === 'MONTHLY_SUBSCRIPTION' ||
+            monthlySubscription
+            ? 'MONTHLY_SUBSCRIPTION'
+            : 'VISITOR';
+        setShowBillingChoiceScreen(
+          electronicBillingEnabledRef.current && sessionType !== 'MONTHLY_SUBSCRIPTION',
+        );
+        if (sessionType === 'MONTHLY_SUBSCRIPTION') {
+          setMonthlyPlate(
+            monthlySubscription?.plate ??
+              asString(payload.vehiclePlate) ??
+              '',
+          );
+          setShowBillingDetailsScreen(false);
+        } else {
+          resetMonthlyFlow();
+        }
+        setPaymentDetails((current: PaymentDetails) => ({
+          ...current,
+          paymentSessionId: asString(payload.paymentSessionId),
+          sessionType,
+          identifierLabel: asString(payload.identifierLabel) === 'Cedula' ? 'Cedula' : 'UUID',
+          identifierValue: asString(payload.identifierValue),
+          amountDue: asNumber(payload.targetAmount),
+          enteredAt: formatBackendDate(asString(payload.enteredAt)),
+          insertedAmount: 0,
+          insertedItems: [],
+          changeAmount: 0,
+          concept: asString(payload.concept),
+          vehiclePlate: asString(payload.vehiclePlate) || null,
+          status: 'VALIDATED',
+          acceptancePolicy: parseAcceptancePolicy(payload.acceptancePolicy),
+          monthlySubscription,
+        }));
+        setStatusMessage(
+          sessionType === 'MONTHLY_SUBSCRIPTION'
+            ? 'Mensualidad validada. Revise el valor a cobrar'
+            : 'QR validado. Revise el valor a cobrar',
+        );
+      });
 
-    eventSource.addEventListener('cash.received', (event) => {
-      const payload = parseEventPayload(event);
-      if (!payload) {
-        return;
-      }
+      eventSource.addEventListener('session.collecting-enabled', (event) => {
+        const payload = parseEventPayload(event);
+        if (!payload) {
+          return;
+        }
 
-      setPaymentStage('collecting');
-      setPaymentDetails((current: PaymentDetails) => ({
-        ...current,
-        ...paymentDetailsFromCashEvent(current, payload),
-      }));
-    });
+        if (paymentLoadingTimerRef.current !== null) {
+          window.clearTimeout(paymentLoadingTimerRef.current);
+          paymentLoadingTimerRef.current = null;
+        }
+        setPaymentLoading(false);
+        setPaymentStage('collecting');
+        setPaymentDetails((current: PaymentDetails) => ({
+          ...current,
+          paymentSessionId: asString(payload.paymentSessionId) || current.paymentSessionId,
+          insertedAmount: asNumber(payload.insertedAmount),
+          amountDue: asNumber(payload.targetAmount) || current.amountDue,
+          status: 'LISTENING_CASH',
+          acceptancePolicy: parseAcceptancePolicy(payload.acceptancePolicy),
+        }));
+        // setStatusMessage('Recepcion de efectivo habilitada');
+      });
 
-    eventSource.addEventListener('session.completed', (event) => {
-      const payload = parseEventPayload(event);
-      if (!payload) {
-        return;
-      }
+      eventSource.addEventListener('cash.received', (event) => {
+        const payload = parseEventPayload(event);
+        if (!payload) {
+          return;
+        }
 
-      if (paymentLoadingTimerRef.current !== null) {
-        window.clearTimeout(paymentLoadingTimerRef.current);
-        paymentLoadingTimerRef.current = null;
-      }
-      setPaymentLoading(false);
-      setPaymentStage('finalizing');
-      const paymentRegistered = payload.paymentRegistered === true;
-      setPaymentDetails((current: PaymentDetails) => ({
-        ...current,
-        paymentSessionId: asString(payload.paymentSessionId) || current.paymentSessionId,
-        insertedAmount: asNumber(payload.insertedAmount),
-        amountDue: asNumber(payload.targetAmount) || current.amountDue,
-        changeAmount: asNumber(payload.changeAmount),
-        status: paymentRegistered ? 'COMPLETED' : 'COMPLETED_WITH_WARNING',
-        acceptancePolicy: null,
-      }));
-      // setStatusMessage('Pago finalizado. Puede imprimir su comprobante');
-    });
+        setPaymentStage('collecting');
+        setPaymentDetails((current: PaymentDetails) => ({
+          ...current,
+          ...paymentDetailsFromCashEvent(current, payload),
+        }));
+      });
 
-    eventSource.addEventListener('machine.low-change-warning', (event) => {
-      const payload = parseEventPayload(event);
-      if (!payload) {
-        return;
-      }
+      eventSource.addEventListener('session.completed', (event) => {
+        const payload = parseEventPayload(event);
+        if (!payload) {
+          return;
+        }
 
-      setPaymentDetails((current: PaymentDetails) => ({
-        ...current,
-        acceptancePolicy: parseAcceptancePolicy(payload.acceptancePolicy) ?? current.acceptancePolicy ?? null,
-      }));
-    });
+        if (paymentLoadingTimerRef.current !== null) {
+          window.clearTimeout(paymentLoadingTimerRef.current);
+          paymentLoadingTimerRef.current = null;
+        }
+        setPaymentLoading(false);
+        setPaymentStage('finalizing');
+        const paymentRegistered = payload.paymentRegistered === true;
+        setPaymentDetails((current: PaymentDetails) => ({
+          ...current,
+          paymentSessionId: asString(payload.paymentSessionId) || current.paymentSessionId,
+          insertedAmount: asNumber(payload.insertedAmount),
+          amountDue: asNumber(payload.targetAmount) || current.amountDue,
+          changeAmount: asNumber(payload.changeAmount),
+          status: paymentRegistered ? 'COMPLETED' : 'COMPLETED_WITH_WARNING',
+          acceptancePolicy: null,
+        }));
+        // setStatusMessage('Pago finalizado. Puede imprimir su comprobante');
+      });
 
-    eventSource.addEventListener('collector.sample-received', (event) => {
-      const payload = parseEventPayload(event);
-      if (!payload) {
-        return;
-      }
+      eventSource.addEventListener('machine.low-change-warning', (event) => {
+        const payload = parseEventPayload(event);
+        if (!payload) {
+          return;
+        }
 
-      const sample: CollectorSample = {
-        amount: asNumber(payload.amount),
-        kind: asString(payload.kind) === 'COIN' ? 'COIN' : 'BILL',
-        source: asString(payload.source),
-        receivedAt: asString(payload.receivedAt) || new Date().toISOString(),
+        setPaymentDetails((current: PaymentDetails) => ({
+          ...current,
+          acceptancePolicy: parseAcceptancePolicy(payload.acceptancePolicy) ?? current.acceptancePolicy ?? null,
+        }));
+      });
+
+      eventSource.addEventListener('collector.sample-received', (event) => {
+        const payload = parseEventPayload(event);
+        if (!payload) {
+          return;
+        }
+
+        const sample: CollectorSample = {
+          amount: asNumber(payload.amount),
+          kind: asString(payload.kind) === 'COIN' ? 'COIN' : 'BILL',
+          source: asString(payload.source),
+          receivedAt: asString(payload.receivedAt) || new Date().toISOString(),
+        };
+
+        setCollectorSamples((current) => [sample, ...current].slice(0, 12));
+      });
+
+      const resetToIdleFromEvent = () => {
+        if (paymentLoadingTimerRef.current !== null) {
+          window.clearTimeout(paymentLoadingTimerRef.current);
+          paymentLoadingTimerRef.current = null;
+        }
+        setPaymentLoading(false);
+        setPaymentStage('idle');
+        setPaymentDetails(demoPayment);
+        resetBillingFlow();
+        resetMonthlyFlow();
+        setStatusMessage('Escanee su QR para iniciar el pago');
       };
 
-      setCollectorSamples((current) => [sample, ...current].slice(0, 12));
-    });
+      // Un re-escaneo (ej. QR/cedula de mensualidad leido varias veces) crea
+      // una sesion nueva y deja la anterior huerfana en el backend; esa sesion
+      // vieja expira sola minutos despues y emite su propio session.timeout.
+      // Sin este filtro, ese evento tardio cerraba la sesion actual (valida,
+      // con tiempo de sobra) solo porque coincidia con estar en pantalla de
+      // pago — de ahi que la pantalla "se saliera" sin razon.
+      const belongsToCurrentSession = (payload: Record<string, unknown> | null) =>
+        !payload?.paymentSessionId || payload.paymentSessionId === paymentSessionIdRef.current;
 
-    const resetToIdleFromEvent = () => {
-      if (paymentLoadingTimerRef.current !== null) {
-        window.clearTimeout(paymentLoadingTimerRef.current);
-        paymentLoadingTimerRef.current = null;
-      }
-      setPaymentLoading(false);
-      setPaymentStage('idle');
-      setPaymentDetails(demoPayment);
-      resetBillingFlow();
-      resetMonthlyFlow();
-      setStatusMessage('Escanee su QR para iniciar el pago');
-    };
+      eventSource.addEventListener('session.timeout', (event) => {
+        const payload = parseEventPayload(event as MessageEvent);
+        if (!belongsToCurrentSession(payload)) {
+          return;
+        }
+        if (paymentLoadingTimerRef.current !== null) {
+          window.clearTimeout(paymentLoadingTimerRef.current);
+          paymentLoadingTimerRef.current = null;
+        }
+        setPaymentLoading(false);
+        const insertedAmt = payload && typeof payload.insertedAmount === 'number' ? payload.insertedAmount : 0;
+        const msg = insertedAmt > 0
+          ? 'Tiempo agotado. Tu efectivo sera devuelto automaticamente. Regresando al inicio...'
+          : 'Sesion cancelada por inactividad. Regresando al inicio...';
+        setCancelNotice((prev) => prev ?? msg);
+      });
+      eventSource.addEventListener('session.canceled', (event) => {
+        const payload = parseEventPayload(event as MessageEvent);
+        if (!belongsToCurrentSession(payload)) {
+          return;
+        }
+        resetToIdleFromEvent();
+      });
 
-    // Un re-escaneo (ej. QR/cedula de mensualidad leido varias veces) crea
-    // una sesion nueva y deja la anterior huerfana en el backend; esa sesion
-    // vieja expira sola minutos despues y emite su propio session.timeout.
-    // Sin este filtro, ese evento tardio cerraba la sesion actual (valida,
-    // con tiempo de sobra) solo porque coincidia con estar en pantalla de
-    // pago — de ahi que la pantalla "se saliera" sin razon.
-    const belongsToCurrentSession = (payload: Record<string, unknown> | null) =>
-      !payload?.paymentSessionId || payload.paymentSessionId === paymentSessionIdRef.current;
-
-    eventSource.addEventListener('session.timeout', (event) => {
-      const payload = parseEventPayload(event as MessageEvent);
-      if (!belongsToCurrentSession(payload)) {
-        return;
-      }
-      if (paymentLoadingTimerRef.current !== null) {
-        window.clearTimeout(paymentLoadingTimerRef.current);
-        paymentLoadingTimerRef.current = null;
-      }
-      setPaymentLoading(false);
-      const insertedAmt = payload && typeof payload.insertedAmount === 'number' ? payload.insertedAmount : 0;
-      const msg = insertedAmt > 0
-        ? 'Tiempo agotado. Tu efectivo sera devuelto automaticamente. Regresando al inicio...'
-        : 'Sesion cancelada por inactividad. Regresando al inicio...';
-      setCancelNotice((prev) => prev ?? msg);
-    });
-    eventSource.addEventListener('session.canceled', (event) => {
-      const payload = parseEventPayload(event as MessageEvent);
-      if (!belongsToCurrentSession(payload)) {
-        return;
-      }
-      resetToIdleFromEvent();
-    });
-
-    eventSource.addEventListener('machine.refund-alert', (event) => {
-      const payload = parseEventPayload(event as MessageEvent);
-      const reason = payload && typeof payload.reason === 'string'
-        ? payload.reason
-        : 'No fue posible devolver el efectivo automaticamente';
-      setCancelNotice(null);
-      setMaintenanceReason(reason);
-      resetToIdleFromEvent();
-      setRootMode('maintenance');
-    });
-
-    eventSource.addEventListener('machine.session-error', (event) => {
-      const payload = parseEventPayload(event as MessageEvent);
-      const reason = payload && typeof payload.reason === 'string'
-        ? payload.reason
-        : 'Ocurrio un error inesperado — contacte al operador';
-      setCancelNotice(null);
-      setMaintenanceReason(reason);
-      resetToIdleFromEvent();
-      setRootMode('maintenance');
-    });
-
-    eventSource.addEventListener('kiosk.mode.changed', (event) => {
-      const payload = parseEventPayload(event);
-      if (!payload) {
-        return;
-      }
-
-      const mode = asString(payload.mode);
-      setMaintenanceReason(
-        mode === 'MAINTENANCE' ? resolveKioskMaintenanceReason(payload) : null,
-      );
-      setRootMode(mode === 'MAINTENANCE' ? 'maintenance' : 'payment');
-    });
-
-    const syncActiveSession = () => {
-      void fetchActiveKioskSession()
-        .then((session) => {
-          if (!session) return;
-          applySessionSummary(session);
-        })
-        .catch(() => undefined);
-    };
-
-    const syncKioskState = () => {
-      void fetchKioskState()
-        .then((state) => {
-          if (rootModeRef.current === 'admin-dashboard' || rootModeRef.current === 'admin-login') {
-            setElectronicBillingFeature(state.features?.electronicBillingEnabled === true);
-            setMaintenanceReason(
-              state.mode === 'MAINTENANCE' ? resolveKioskMaintenanceReason(state) : null,
-            );
-            return;
-          }
-
-          applyKioskState(state);
-        })
-        .catch(() => undefined);
-    };
-
-    eventSource.onopen = () => {
-      if (backendLostTimerRef.current !== null) {
-        window.clearTimeout(backendLostTimerRef.current);
-        backendLostTimerRef.current = null;
-        setStatusMessage('Escanee su QR para iniciar el pago');
-      }
-      // Recuperar estado perdido mientras la conexion SSE estuvo caida
-      syncKioskState();
-      syncActiveSession();
-    };
-
-    eventSource.onerror = () => {
-      if (SIMULATE) return;
-      if (backendLostTimerRef.current !== null) return;
-      setStatusMessage('Reconectando con el backend...');
-      backendLostTimerRef.current = window.setTimeout(() => {
-        backendLostTimerRef.current = null;
+      eventSource.addEventListener('machine.refund-alert', (event) => {
+        const payload = parseEventPayload(event as MessageEvent);
+        const reason = payload && typeof payload.reason === 'string'
+          ? payload.reason
+          : 'No fue posible devolver el efectivo automaticamente';
+        setCancelNotice(null);
+        setMaintenanceReason(reason);
+        resetToIdleFromEvent();
         setRootMode('maintenance');
-        setStatusMessage('Sin conexion con el backend PPE');
-      }, 10_000);
+      });
+
+      eventSource.addEventListener('machine.session-error', (event) => {
+        const payload = parseEventPayload(event as MessageEvent);
+        const reason = payload && typeof payload.reason === 'string'
+          ? payload.reason
+          : 'Ocurrio un error inesperado — contacte al operador';
+        setCancelNotice(null);
+        setMaintenanceReason(reason);
+        resetToIdleFromEvent();
+        setRootMode('maintenance');
+      });
+
+      eventSource.addEventListener('kiosk.mode.changed', (event) => {
+        const payload = parseEventPayload(event);
+        if (!payload) {
+          return;
+        }
+
+        const mode = asString(payload.mode);
+        setMaintenanceReason(
+          mode === 'MAINTENANCE' ? resolveKioskMaintenanceReason(payload) : null,
+        );
+        setRootMode(mode === 'MAINTENANCE' ? 'maintenance' : 'payment');
+      });
+
+      const syncActiveSession = () => {
+        void fetchActiveKioskSession()
+          .then((session) => {
+            if (!session) return;
+            applySessionSummary(session);
+          })
+          .catch(() => undefined);
+      };
+
+      const syncKioskState = () => {
+        void fetchKioskState()
+          .then((state) => {
+            if (rootModeRef.current === 'admin-dashboard' || rootModeRef.current === 'admin-login') {
+              setElectronicBillingFeature(state.features?.electronicBillingEnabled === true);
+              setMaintenanceReason(
+                state.mode === 'MAINTENANCE' ? resolveKioskMaintenanceReason(state) : null,
+              );
+              return;
+            }
+
+            applyKioskState(state);
+          })
+          .catch(() => undefined);
+      };
+
+      eventSource.onopen = () => {
+        lastMessageAt = Date.now();
+        if (backendLostTimerRef.current !== null) {
+          window.clearTimeout(backendLostTimerRef.current);
+          backendLostTimerRef.current = null;
+          setStatusMessage('Escanee su QR para iniciar el pago');
+        }
+        // Recuperar estado perdido mientras la conexion SSE estuvo caida
+        syncKioskState();
+        syncActiveSession();
+      };
+
+      eventSource.onerror = () => {
+        if (SIMULATE) return;
+        // CLOSED: el navegador ya no va a reintentar por su cuenta.
+        if (eventSource.readyState === EventSource.CLOSED) {
+          scheduleReconnect();
+        }
+        if (backendLostTimerRef.current !== null) return;
+        setStatusMessage('Reconectando con el backend...');
+        backendLostTimerRef.current = window.setTimeout(() => {
+          backendLostTimerRef.current = null;
+          setRootMode('maintenance');
+          setStatusMessage('Sin conexion con el backend PPE');
+        }, 10_000);
+      };
     };
+
+    connect();
+
+    // Conexion colgada: abierta pero sin latidos del backend.
+    const watchdogTimer = SIMULATE
+      ? null
+      : window.setInterval(() => {
+          if (Date.now() - lastMessageAt > SSE_SILENCE_LIMIT_MS) {
+            lastMessageAt = Date.now();
+            scheduleReconnect();
+          }
+        }, 5_000);
 
     return () => {
+      disposed = true;
+      if (watchdogTimer !== null) window.clearInterval(watchdogTimer);
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       eventSource.close();
       if (backendLostTimerRef.current !== null) {
         window.clearTimeout(backendLostTimerRef.current);
