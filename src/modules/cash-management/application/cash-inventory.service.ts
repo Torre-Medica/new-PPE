@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, In, IsNull, MoreThanOrEqual, Not, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, IsNull, MoreThan, MoreThanOrEqual, Not, Repository } from 'typeorm';
 import { CashAdjustmentDto } from '@modules/cash-management/application/dto/cash-adjustment.dto';
 import { CreateCashCloseoutDto } from '@modules/cash-management/application/dto/create-cash-closeout.dto';
 import { RecordCashEventDto } from '@modules/cash-management/application/dto/record-cash-event.dto';
@@ -353,10 +353,13 @@ export class CashInventoryService {
           },
         });
         // Canceladas manualmente o vencidas por tiempo: ambas guardan completedAt al cerrarse.
+        // Solo cuentan las que alcanzaron a recibir dinero (el que se le devuelve al cliente);
+        // un QR escaneado sin meter dinero no es una transaccion cancelada.
         const canceledPayments = await manager.find(PaymentSessionEntity, {
           where: {
             status: In([PaymentSessionStatus.Canceled, PaymentSessionStatus.Timeout]),
             completedAt: MoreThanOrEqual(cycleStartedAt),
+            insertedAmount: MoreThan(0),
           },
         });
         const dispenserSlots = await manager.find(DispenserSlotEntity, {
@@ -932,9 +935,9 @@ export class CashInventoryService {
       { item: 'Dinero devuelto', total: dispensedTotal },
       { item: 'Recaudo neto', total: netCollectionTotal },
     ];
-    // Valor de las sesiones canceladas: lo que se iba a cobrar (no es dinero recibido).
+    // Valor de las sesiones canceladas: el dinero que el cliente alcanzo a ingresar.
     const canceledTotal = args.canceledPayments.reduce(
-      (sum, payment) => sum + payment.targetAmount,
+      (sum, payment) => sum + payment.insertedAmount,
       0,
     );
     // TOTAL de transacciones definido por el negocio: exitosas - canceladas.
