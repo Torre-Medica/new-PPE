@@ -116,7 +116,7 @@ function Key({ label, wide, accent, onClick }: KeyProps) {
     'bg-white/80 text-ink border-black/10';
   return (
     <button
-      className={`rounded-2xl border py-5 text-2xl font-semibold transition-all active:scale-95 select-none ${color} ${wide ? 'flex-[3]' : 'flex-1'} min-w-0`}
+      className={`rounded-2xl border py-5 [@media(max-height:820px)]:py-3 text-2xl font-semibold transition-all active:scale-95 select-none ${color} ${wide ? 'flex-[3]' : 'flex-1'} min-w-0`}
       onClick={onClick}
     >
       {label}
@@ -305,7 +305,7 @@ export function KeyboardModal({
 
   // Teclas (letras + teclado numerico): iguales en el panel y en la vista de pantalla completa
   const keysBlock = (
-        <div className="mb-4 flex gap-5">
+        <div className="mb-4 [@media(max-height:820px)]:mb-3 flex gap-5">
           {/* Letras / simbolos */}
           <div className="min-w-0 flex-1 space-y-2">
             {rows.map((row, ri) => (
@@ -380,9 +380,9 @@ export function KeyboardModal({
   // ── Vista de pantalla completa (ej. "Ingresa tu placa") ──────────────
   if (fullscreen) {
     return (
-      <div className="fixed inset-0 z-50 flex flex-col bg-[#f3f6fb] px-10 pb-8 pt-6" onPointerDownCapture={resetIdle}>
+      <div className="fixed inset-0 z-50 flex flex-col bg-[#f3f6fb] px-10 pb-8 pt-6 [@media(max-height:820px)]:pb-3 [@media(max-height:820px)]:pt-3" onPointerDownCapture={resetIdle}>
         <div className="flex items-center justify-between">
-          <img src="/LogoCoins.png" alt="Coins" className="h-12 w-auto select-none" draggable={false} />
+          <img src="/LogoCoins.png" alt="Coins" className="h-12 w-auto select-none [@media(max-height:820px)]:h-9" draggable={false} />
           {idleEnabled && (
             <div className="rounded-full bg-white px-5 py-2 text-lg font-medium text-slate-600 shadow-sm">
               {idleSeconds > 0 ? `Cancelacion en: ${idleSeconds} s` : 'Cancelando...'}
@@ -390,30 +390,30 @@ export function KeyboardModal({
           )}
         </div>
         <div className="mx-auto flex w-full max-w-[110rem] flex-1 flex-col justify-center">
-          <div className="mb-6 flex flex-col items-center text-center">
+          <div className="mb-6 [@media(max-height:820px)]:mb-3 flex flex-col items-center text-center">
             {imageSrc && (
-              <div className="relative mb-3 flex h-36 min-w-[18rem] items-center justify-center px-4">
+              <div className="relative mb-3 flex h-36 min-w-[18rem] [@media(max-height:820px)]:mb-1 [@media(max-height:820px)]:h-20 items-center justify-center px-4">
                 {/* halo celeste detras del icono */}
                 {imageHalo && <div className="absolute inset-0 rounded-full bg-brand-100/70 blur-2xl" />}
                 <img
                   src={imageSrc}
                   alt=""
-                  className="relative h-32 w-auto max-w-none select-none mix-blend-multiply"
+                  className="relative h-32 w-auto max-w-none [@media(max-height:820px)]:h-[4.5rem] select-none mix-blend-multiply"
                   draggable={false}
                 />
               </div>
             )}
-            <h2 className="text-6xl font-extrabold tracking-tight text-[#0b2a5b]">{title ?? label}</h2>
-            {hint && <p className="mt-3 text-2xl text-slate-600">{hint}</p>}
+            <h2 className="text-6xl font-extrabold tracking-tight [@media(max-height:820px)]:text-4xl text-[#0b2a5b]">{title ?? label}</h2>
+            {hint && <p className="mt-3 text-2xl text-slate-600 [@media(max-height:820px)]:mt-1 [@media(max-height:820px)]:text-lg">{hint}</p>}
           </div>
           {/* El error va dentro del campo (no agrega altura) para que el teclado y los
               botones no se desplacen fuera de la pantalla */}
           <div
-            className={`mb-5 flex h-[5.5rem] items-center gap-4 rounded-2xl border-2 bg-white px-6 shadow-sm ${
+            className={`mb-5 flex h-[5.5rem] items-center [@media(max-height:820px)]:mb-3 [@media(max-height:820px)]:h-16 gap-4 rounded-2xl border-2 bg-white px-6 shadow-sm ${
               error ? 'border-alert-500' : 'border-brand-500'
             }`}
           >
-            <span className="min-w-0 flex-1 truncate text-4xl font-semibold text-ink">
+            <span className="min-w-0 flex-1 truncate text-4xl font-semibold [@media(max-height:820px)]:text-3xl text-ink">
               {display ? display : <span className="font-normal text-slate-400">{placeholder ?? '...'}</span>}
             </span>
             {error && (
