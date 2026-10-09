@@ -22,6 +22,8 @@ export const envValidationSchema = Joi.object({
   PPE_JWT_EXPIRES_IN: Joi.string().default('4h'),
   PRINTER_JAVA_SERVER_URL: Joi.string().uri().default('http://localhost:8080/imprimir'),
   PRINTER_NAME: Joi.string().default('printer'),
+  // Espacios a la izquierda de las lineas alineadas a la izquierda (margen del ticket)
+  PRINTER_LEFT_PADDING: Joi.number().integer().min(0).max(10).default(1),
   PPE_MACHINE_NAME: Joi.string().default('PPE'),
   PAYMENT_SESSION_VALIDATING_TIMEOUT_MS: Joi.number().integer().min(5_000).default(15_000),
   PAYMENT_SESSION_REVIEW_TIMEOUT_MS: Joi.number().integer().min(5_000).default(30_000),

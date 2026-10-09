@@ -35,6 +35,7 @@ type CloseoutReceiptRow = {
 type CloseoutReceiptSection = {
   title: string;
   rows: CloseoutReceiptRow[];
+  summaryRows?: CloseoutReceiptRow[];
   total?: number | string | null;
 };
 
@@ -48,6 +49,7 @@ type CloseoutReceiptPayload = {
   periodStartedAt?: string;
   periodEndedAt?: string;
   transactionCount?: number | string | null;
+  transactionsTicket?: CloseoutReceiptSection;
   sections?: CloseoutReceiptSection[];
   footerLines?: string[];
 };
@@ -82,8 +84,7 @@ type PaymentReceiptMetadata = {
 };
 
 const TICKET_WIDTH = 42;
-const LEFT_PADDING = '     ';
-const CONTENT_WIDTH = TICKET_WIDTH - LEFT_PADDING.length;
+const ITEM_COLUMN_WIDTH = 20;
 
 @Injectable()
 export class PrintingService {
@@ -437,9 +438,59 @@ export class PrintingService {
     return operations;
   }
 
+  /**
+   * El cierre se imprime en dos tickets separados por un corte:
+   * 1. Ticket corto de transacciones (Visitante Carro/Moto, exitosas, canceladas, total).
+   * 2. Cierre completo con todas las secciones.
+   */
   private buildEnrichedCloseoutOperations(
     closeout: CashCloseoutEntity,
     receipt: CloseoutReceiptPayload,
+  ): PrinterOperation[] {
+    // Cierres guardados antes de existir el ticket corto: se arma con la seccion de transacciones
+    const transactionsTicket =
+      receipt.transactionsTicket ??
+      receipt.sections?.find((section) => section.title === 'Transacciones');
+
+    const operations: PrinterOperation[] = [];
+
+    if (transactionsTicket) {
+      operations.push(
+        ...this.buildCloseoutHeaderOperations(closeout, receipt, false),
+        ...this.buildCloseoutSectionOperations(transactionsTicket),
+        { accion: 'feed', datos: '2' },
+        { accion: 'cut', datos: 'full' },
+      );
+    }
+
+    operations.push(...this.buildCloseoutHeaderOperations(closeout, receipt, true));
+
+    for (const section of receipt.sections ?? []) {
+      operations.push(...this.buildCloseoutSectionOperations(section));
+    }
+
+    operations.push(
+      { accion: 'text', datos: this.separator() },
+      { accion: 'textalign', datos: 'left' },
+      { accion: 'text', datos: `Tipo: ${(receipt.closeoutType ?? closeout.closeoutType) === 'PARTIAL' ? 'Parcial' : 'Total'}` },
+      ...this.responsibleOperations(receipt.responsible ?? closeout.closedBy, true),
+      ...this.labelValueOperations('Fecha cierre:', this.formatDate(closeout.closedAt)),
+    );
+
+    for (const line of receipt.footerLines ?? []) {
+      operations.push(
+        ...this.wrapText(line).map((datos) => ({ accion: 'text' as const, datos })),
+      );
+    }
+
+    operations.push({ accion: 'feed', datos: '2' }, { accion: 'cut', datos: 'full' });
+    return operations;
+  }
+
+  private buildCloseoutHeaderOperations(
+    closeout: CashCloseoutEntity,
+    receipt: CloseoutReceiptPayload,
+    responsibleOnOwnLine: boolean,
   ): PrinterOperation[] {
     const machineName =
       receipt.machine ?? this.configService.get<string>('printing.machineName', 'PPE');
@@ -459,70 +510,82 @@ export class PrintingService {
       operations.push({ accion: 'text', datos: `Hasta: ${this.formatDate(new Date(receipt.periodEndedAt))}` });
     }
 
-    operations.push({ accion: 'textalign', datos: 'left' });
-    operations.push({ accion: 'text', datos: this.separator() });
-    operations.push({
-      accion: 'text',
-      datos: `ID cierre: ${String(receipt.closeoutId ?? closeout.id)}`,
-    });
-    operations.push({
-      accion: 'text',
-      datos: `Responsable: ${receipt.responsible ?? closeout.closedBy}`,
-    });
-    operations.push({
-      accion: 'text',
-      datos: `Transacciones: ${String(receipt.transactionCount ?? closeout.transactionCount)}`,
-    });
-    operations.push({ accion: 'text', datos: this.separator() });
-
-    for (const section of receipt.sections ?? []) {
-      operations.push(
-        { accion: 'textalign', datos: 'center' },
-        { accion: 'text', datos: section.title },
-        { accion: 'textalign', datos: 'left' },
-        { accion: 'text', datos: this.headerRow() },
-        { accion: 'text', datos: this.separator() },
-      );
-
-      for (const row of section.rows) {
-        operations.push({ accion: 'textalign', datos: 'left' });
-        operations.push({
-          accion: 'text',
-          datos: this.dataRow(
-            row.item,
-            row.quantity !== undefined && row.quantity !== null ? String(row.quantity) : '',
-            row.total !== undefined && row.total !== null ? this.formatAmount(row.total) : '',
-          ),
-        });
-      }
-
-      if (section.total !== undefined && section.total !== null && section.total !== '') {
-        operations.push(
-          { accion: 'text', datos: this.separator() },
-          {
-            accion: 'text',
-            datos: this.totalLine(section.total),
-          },
-        );
-      }
-
-      operations.push({ accion: 'feed', datos: '1' });
-    }
-
     operations.push(
-      { accion: 'text', datos: this.separator() },
       { accion: 'textalign', datos: 'left' },
-      { accion: 'text', datos: `Tipo: ${(receipt.closeoutType ?? closeout.closeoutType) === 'PARTIAL' ? 'Parcial' : 'Total'}` },
-      { accion: 'text', datos: `Responsable: ${receipt.responsible ?? closeout.closedBy}` },
-      { accion: 'text', datos: `Fecha cierre: ${this.formatDate(closeout.closedAt)}` },
+      { accion: 'text', datos: this.separator() },
+      { accion: 'text', datos: `ID cierre: ${String(receipt.closeoutId ?? closeout.id)}` },
+      ...this.responsibleOperations(receipt.responsible ?? closeout.closedBy, responsibleOnOwnLine),
+      {
+        accion: 'text',
+        datos: `Transacciones: ${String(receipt.transactionCount ?? closeout.transactionCount)}`,
+      },
+      { accion: 'text', datos: this.separator() },
     );
 
-    for (const line of receipt.footerLines ?? []) {
-      operations.push({ accion: 'text', datos: line });
+    return operations;
+  }
+
+  private buildCloseoutSectionOperations(section: CloseoutReceiptSection): PrinterOperation[] {
+    const operations: PrinterOperation[] = [
+      { accion: 'textalign', datos: 'center' },
+      { accion: 'text', datos: section.title },
+      { accion: 'textalign', datos: 'left' },
+      { accion: 'text', datos: this.headerRow() },
+      { accion: 'text', datos: this.separator() },
+      ...section.rows.flatMap((row) => this.closeoutRowOperations(row)),
+    ];
+
+    const hasTotal = section.total !== undefined && section.total !== null && section.total !== '';
+
+    if (section.summaryRows?.length) {
+      // Separador, filas de resumen y el TOTAL inmediatamente debajo
+      operations.push(
+        { accion: 'text', datos: this.separator() },
+        ...section.summaryRows.flatMap((row) => this.closeoutRowOperations(row)),
+      );
+      if (hasTotal) {
+        operations.push({ accion: 'text', datos: this.totalLine(section.total!) });
+      }
+    } else if (hasTotal) {
+      operations.push(
+        { accion: 'text', datos: this.separator() },
+        { accion: 'text', datos: this.totalLine(section.total!) },
+      );
     }
 
-    operations.push({ accion: 'feed', datos: '2' }, { accion: 'cut', datos: 'full' });
+    operations.push({ accion: 'feed', datos: '1' });
     return operations;
+  }
+
+  private closeoutRowOperations(row: CloseoutReceiptRow): PrinterOperation[] {
+    const quantity = row.quantity !== undefined && row.quantity !== null ? String(row.quantity) : '';
+    const total = row.total !== undefined && row.total !== null ? this.formatAmount(row.total) : '';
+    const item = row.item.replace(/\s+/g, ' ').trim();
+
+    // Nombre mas largo que la columna Item (ej. "Transacciones canceladas"): el nombre va
+    // solo en una linea y Cnt/Total en la siguiente, para no descuadrar las columnas.
+    if (item.length > ITEM_COLUMN_WIDTH) {
+      return [
+        { accion: 'text', datos: item },
+        { accion: 'text', datos: this.dataRow('', quantity, total) },
+      ];
+    }
+
+    return [{ accion: 'text', datos: this.dataRow(item, quantity, total) }];
+  }
+
+  // "Responsable: x" en una sola linea, o el valor en la linea siguiente cuando se pide
+  // (o cuando no cabe en el ancho del ticket).
+  private responsibleOperations(responsible: string, ownLine: boolean): PrinterOperation[] {
+    const singleLine = `Responsable: ${responsible}`;
+    if (!ownLine && singleLine.length <= this.contentWidth) {
+      return [{ accion: 'text', datos: singleLine }];
+    }
+
+    return [
+      { accion: 'text', datos: 'Responsable:' },
+      { accion: 'text', datos: responsible },
+    ];
   }
 
   private parseCloseoutReceipt(raw: string | null): CloseoutReceiptPayload | null {
@@ -571,7 +634,7 @@ export class PrintingService {
   }
 
   private separator(): string {
-    return '-'.repeat(CONTENT_WIDTH);
+    return '-'.repeat(this.contentWidth);
   }
 
   private headerRow(): string {
@@ -591,9 +654,9 @@ export class PrintingService {
     // totalWidth: con los anchos anteriores (20/6) los montos grandes (ej.
     // "$ 3.052.400", 11 caracteres) se truncaban ("$ 3.052~") por quedar solo
     // 9 caracteres disponibles para el total.
-    const itemWidth = 18;
+    const itemWidth = ITEM_COLUMN_WIDTH;
     const quantityWidth = 4;
-    const totalWidth = CONTENT_WIDTH - itemWidth - quantityWidth - 2;
+    const totalWidth = this.contentWidth - itemWidth - quantityWidth - 2;
 
     return [
       this.fitText(item, itemWidth).padEnd(itemWidth, ' '),
@@ -602,8 +665,55 @@ export class PrintingService {
     ].join(' ');
   }
 
+  // Margen izquierdo configurable (PRINTER_LEFT_PADDING); el ancho util del ticket se reduce en la misma medida.
+  private get leftPadding(): number {
+    const value = Number(this.configService.get<number>('printing.leftPadding', 1));
+    return Number.isInteger(value) && value >= 0 ? value : 1;
+  }
+
+  private get contentWidth(): number {
+    return TICKET_WIDTH - this.leftPadding;
+  }
+
   private withLeftPadding(value: string): string {
-    return `${LEFT_PADDING}${value}`;
+    return `${' '.repeat(this.leftPadding)}${value}`;
+  }
+
+  // Parte un texto en lineas que caben en el ancho util, cortando por palabras.
+  private wrapText(value: string): string[] {
+    const width = this.contentWidth;
+    const lines: string[] = [];
+    let current = '';
+
+    for (const word of value.replace(/\s+/g, ' ').trim().split(' ')) {
+      if (!current) {
+        current = word;
+      } else if (`${current} ${word}`.length <= width) {
+        current = `${current} ${word}`;
+      } else {
+        lines.push(current);
+        current = word;
+      }
+      while (current.length > width) {
+        lines.push(current.slice(0, width));
+        current = current.slice(width);
+      }
+    }
+
+    if (current) {
+      lines.push(current);
+    }
+    return lines;
+  }
+
+  // "Etiqueta: valor" en una linea si cabe; si no, la etiqueta arriba y el valor debajo.
+  private labelValueOperations(label: string, value: string): PrinterOperation[] {
+    const singleLine = `${label} ${value}`;
+    if (singleLine.length <= this.contentWidth) {
+      return [{ accion: 'text', datos: singleLine }];
+    }
+
+    return [label, ...this.wrapText(value)].map((datos) => ({ accion: 'text' as const, datos }));
   }
 
   private fitText(value: string, width: number): string {
@@ -621,14 +731,17 @@ export class PrintingService {
 
   private async sendToPrinter(operations: PrinterOperation[]) {
     const config = this.getPrinterConfiguration();
-    const paddedOperations = operations.map((operation) =>
-      operation.accion === 'text'
-        ? {
-            ...operation,
-            datos: this.withLeftPadding(operation.datos),
-          }
-        : operation,
-    );
+    // El margen solo aplica a las lineas alineadas a la izquierda: en las centradas
+    // los espacios corren el texto hacia la derecha.
+    let alignment = 'left';
+    const paddedOperations = operations.map((operation) => {
+      if (operation.accion === 'textalign') {
+        alignment = operation.datos;
+      }
+      return operation.accion === 'text' && alignment === 'left'
+        ? { ...operation, datos: this.withLeftPadding(operation.datos) }
+        : operation;
+    });
 
     const response = await fetch(config.JAVA_SERVER_URL, {
       method: 'POST',

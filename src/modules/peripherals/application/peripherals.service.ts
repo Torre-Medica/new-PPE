@@ -560,6 +560,19 @@ export class PeripheralsService implements OnApplicationBootstrap {
     return this.lastQrScan;
   }
 
+  /**
+   * Solo con SIMULATE_HARDWARE: inyecta un QR como si lo hubiera leido el lector.
+   * Recorre el mismo camino que una lectura real (cooldown, validacion con nexo_back,
+   * cambio de pantalla). Devuelve false si el lector no es el simulado.
+   */
+  simulateQrScan(qrCode: string): boolean {
+    if (!(this.qrScanner instanceof SimulatedQrScannerAdapter)) {
+      return false;
+    }
+    this.qrScanner.emitScan(qrCode);
+    return true;
+  }
+
   private bindLegacyListeners(): void {
     this.billValidator.onBillReceived((amount) => {
       this.logger.log(`[COLLECTOR][BILL] ${amount}`);
@@ -708,6 +721,19 @@ export class PeripheralsService implements OnApplicationBootstrap {
       }
     } else {
       this.logger.warn('Placa electronica omitida — ELECTRONIC_BOARD_PORT y USB VID/PID sin configurar');
+      // Sin esto quedaba el ultimo estado guardado (ej. CONNECTED de una sesion simulada)
+      const reason = 'Placa electronica no configurada (ELECTRONIC_BOARD_PORT o USB VID/PID)';
+      for (const type of [
+        DeviceType.ElectronicBoard,
+        DeviceType.ChangeDispenser,
+        DeviceType.CoinAcceptor,
+        DeviceType.DispenserBill1,
+        DeviceType.DispenserBill2,
+        DeviceType.DispenserCoin1,
+        DeviceType.DispenserCoin2,
+      ]) {
+        await this.updateDeviceState(type, DeviceStatus.Disconnected, null, reason);
+      }
     }
 
     // ── Billetero independiente (opcional) ────────────────────────────────────
@@ -735,6 +761,12 @@ export class PeripheralsService implements OnApplicationBootstrap {
       }
     } else {
       this.logger.log('Billetero omitido — sin VID/PID ni puerto configurado');
+      await this.updateDeviceState(
+        DeviceType.BillValidator,
+        DeviceStatus.Disconnected,
+        null,
+        'Billetero no configurado (BILL_VALIDATOR_PORT o USB VID/PID)',
+      );
     }
 
     await this.logSlotDiagnostics();

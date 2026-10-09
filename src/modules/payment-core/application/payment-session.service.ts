@@ -10,6 +10,13 @@ import { ReturnChangeItem } from '@modules/peripherals/application/peripherals.s
 import { CashDenominationRejectedError } from '@modules/payment-core/domain/errors/cash-denomination-rejected.error';
 import { InsufficientChangeError } from '@modules/payment-core/domain/errors/insufficient-change.error';
 import { PaymentSessionConflictError } from '@modules/payment-core/domain/errors/payment-session-conflict.error';
+import { InvalidVehiclePlateError } from '@modules/payment-core/domain/errors/invalid-vehicle-plate.error';
+import {
+  isValidPlateForVehicle,
+  normalizePlate,
+  PLATE_FORMAT_EXAMPLES,
+  resolvePlateVehicleKind,
+} from '@modules/payment-core/domain/vehicle-plate';
 import { PaymentSessionNotFoundError } from '@modules/payment-core/domain/errors/payment-session-not-found.error';
 import {
   ACTIVE_SESSION_STATUSES,
@@ -360,6 +367,7 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       identifierValue:
         reviewedSession.identificationCode || reviewedSession.qrCode || '',
       vehiclePlate: reviewedSession.vehiclePlate,
+      vehicleType: reviewedSession.vehicleType,
       targetAmount: currentTargetAmount,
       enteredAt: this.resolveReviewDatetime(validationResponse, reviewedSession.startedAt),
       concept: reviewedSession.concept,
@@ -423,6 +431,7 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       );
     }
     this.assertMonthlySubscriptionReadyForCollection(session);
+    const vehiclePlate = this.resolveCollectionPlate(session, dto.vehiclePlate);
 
     const acceptancePolicy = await this.cashInventoryService.getAcceptancePolicy(
       session.targetAmount,
@@ -458,12 +467,14 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       await this.paymentSessionRepository.update(session.id, {
         status: PaymentSessionStatus.ListeningCash,
         metadataJson,
+        vehiclePlate,
       });
       await this.appendEvent(session.id, 'payment.peripherals.acceptance-enabled', null, {
         source: 'peripherals',
         trigger: 'kiosk-collect',
         initiatedBy: dto.initiatedBy ?? 'kiosk',
         electronicBilling: electronicBilling ?? null,
+        vehiclePlate,
       });
     } catch (activationError) {
       const reason =
@@ -486,6 +497,11 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
     }
 
     const updatedSession = await this.getSessionById(session.id);
+    // La placa digitada se envia a nexo_back de una vez (sin esperar el pago);
+    // el commit la vuelve a enviar como respaldo.
+    if (vehiclePlate && vehiclePlate !== session.vehiclePlate) {
+      void this.syncIncomePlate(updatedSession, vehiclePlate);
+    }
     await this.appendEvent(session.id, 'payment.session.started', updatedSession.targetAmount, {
       qrCode: updatedSession.qrCode,
       vehiclePlate: updatedSession.vehiclePlate,
@@ -511,6 +527,64 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
     });
 
     return updatedSession;
+  }
+
+  private async syncIncomePlate(session: PaymentSessionEntity, vehiclePlate: string): Promise<void> {
+    try {
+      const response = await this.serverLinkService.updateIncomePlate({
+        ppeTransactionUuid: session.id,
+        processId: session.serverProcessId,
+        qrCode: session.qrCode,
+        vehiclePlate,
+      });
+      await this.appendEvent(session.id, 'payment.plate.synced', null, { vehiclePlate, response });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`[PLACA] No se pudo enviar la placa ${vehiclePlate} a nexo_back: ${reason}`);
+      await this.appendEvent(session.id, 'payment.plate.sync-failed', null, { vehiclePlate, reason });
+    }
+  }
+
+  private allowsZeroAmountForTesting(): boolean {
+    return this.configService.get<boolean>('peripherals.simulateHardware', false) === true;
+  }
+
+  /**
+   * Placa que digita el cliente al pulsar "Pagar". Debe coincidir con el formato del
+   * tipo de vehiculo del ticket (carro ABC123 / moto ABC12D). Viaja a nexo_back en el
+   * commit (vehiclePlate) para actualizar la placa del ingreso.
+   * Las mensualidades ya traen su placa validada y no se piden de nuevo.
+   */
+  private resolveCollectionPlate(
+    session: PaymentSessionEntity,
+    rawPlate: string | undefined,
+  ): string | null {
+    if (this.extractMonthlySubscriptionFromMetadata(session.metadataJson)) {
+      return session.vehiclePlate;
+    }
+
+    const plate = normalizePlate(rawPlate ?? '');
+    if (!plate) {
+      throw new InvalidVehiclePlateError('Debe ingresar la placa del vehiculo antes de pagar');
+    }
+
+    const kind = resolvePlateVehicleKind(session.vehicleType);
+    if (kind) {
+      if (!isValidPlateForVehicle(plate, kind)) {
+        throw new InvalidVehiclePlateError(
+          `La placa ${plate} no tiene formato de ${kind === 'MOTO' ? 'moto' : 'carro'} (ej. ${PLATE_FORMAT_EXAMPLES[kind]})`,
+        );
+      }
+      return plate;
+    }
+
+    // Ticket sin tipo de vehiculo: se acepta cualquiera de los dos formatos
+    if (!isValidPlateForVehicle(plate, 'CARRO') && !isValidPlateForVehicle(plate, 'MOTO')) {
+      throw new InvalidVehiclePlateError(
+        `La placa ${plate} no es valida (carro ${PLATE_FORMAT_EXAMPLES.CARRO} o moto ${PLATE_FORMAT_EXAMPLES.MOTO})`,
+      );
+    }
+    return plate;
   }
 
   async activateSimulatedCollection(
@@ -1895,6 +1969,7 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
         identifierValue:
           reviewedSession.identificationCode || reviewedSession.qrCode || '',
         vehiclePlate: evaluation.vehiclePlate,
+        vehicleType: evaluation.vehicleType ?? reviewedSession.vehicleType,
         targetAmount: evaluation.amountDue,
         concept: evaluation.concept,
         enteredAt: this.resolveReviewDatetime(validationResponse, reviewedSession.startedAt),
@@ -2218,7 +2293,9 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       };
     }
 
-    if (amountDue <= 0) {
+    // Solo en pruebas (SIMULATE_HARDWARE=true) un ticket en $0 sigue a la revision,
+    // para poder probar las pantallas aunque la tarifa local este en cero.
+    if (amountDue <= 0 && !this.allowsZeroAmountForTesting()) {
       // Llegar aqui significa que nexo_back encontro un proceso valido
       // (accepted: true / explicitPayable) pero no hay monto pendiente. El
       // endpoint real de nexo_back (ppe.gateway.ts) nunca manda messageTitle,
@@ -2598,6 +2675,7 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       changeAmount: session.changeAmount,
       concept: session.concept,
       vehiclePlate: session.vehiclePlate,
+      vehicleType: session.vehicleType,
       enteredAt: session.startedAt.toISOString(),
       startedAt: session.startedAt.toISOString(),
       acceptancePolicy,

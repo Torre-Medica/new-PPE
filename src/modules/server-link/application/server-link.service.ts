@@ -11,6 +11,7 @@ import { KioskMode } from '@modules/persistence/infrastructure/entities/kiosk-st
 import { io, Socket } from 'socket.io-client';
 import { CancelPaymentDto } from '@modules/server-link/application/dto/cancel-payment.dto';
 import { CommitPaymentDto } from '@modules/server-link/application/dto/commit-payment.dto';
+import { UpdateIncomePlateDto } from '@modules/server-link/application/dto/update-income-plate.dto';
 import { ValidatePaymentDto } from '@modules/server-link/application/dto/validate-payment.dto';
 import { ServerLinkPort } from '@modules/server-link/domain/ports/server-link.port';
 import { NexoBackRestService } from '@modules/server-link/application/nexo-back-rest.service';
@@ -116,6 +117,19 @@ export class ServerLinkService implements OnModuleInit, OnModuleDestroy, ServerL
     }
 
     return this.emitWithAck('ppe.payment.cancel', dto);
+  }
+
+  /** Placa digitada en el kiosko: nexo_back la guarda en el ingreso del QR. */
+  async updateIncomePlate(dto: UpdateIncomePlateDto) {
+    if (!this.socket?.connected) {
+      return {
+        source: 'local-fallback',
+        updated: false,
+        ppeTransactionUuid: dto.ppeTransactionUuid,
+      };
+    }
+
+    return this.emitWithAck('ppe.income.plate', dto);
   }
 
   getCompanyInfo() {

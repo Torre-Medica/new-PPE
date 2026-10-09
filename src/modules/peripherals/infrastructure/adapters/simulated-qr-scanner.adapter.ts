@@ -3,6 +3,7 @@ import { QrScannerPort } from '@modules/peripherals/domain/ports/qr-scanner.port
 
 export class SimulatedQrScannerAdapter implements QrScannerPort {
   private readonly logger = new Logger('SimulatedQrScannerAdapter');
+  private qrCodeHandler: ((qrCode: string, rawCode: string) => void) | null = null;
 
   async connect(preferredPort?: string): Promise<string> {
     const port = preferredPort ?? 'SIMULATED';
@@ -12,9 +13,17 @@ export class SimulatedQrScannerAdapter implements QrScannerPort {
 
   async disconnect(): Promise<void> {}
 
-  onQrCode(): void {}
+  onQrCode(handler: (qrCode: string, rawCode: string) => void): void {
+    this.qrCodeHandler = handler;
+  }
 
   onInvalidQr(): void {}
 
   onError(): void {}
+
+  /** Entrega un codigo como si lo hubiera leido el lector fisico (solo pruebas). */
+  emitScan(qrCode: string): void {
+    this.logger.log(`[SIMULADO] QR leido: ${qrCode}`);
+    this.qrCodeHandler?.(qrCode, qrCode);
+  }
 }

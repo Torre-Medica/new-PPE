@@ -1233,7 +1233,7 @@ describe('PaymentSessionService', () => {
       });
       await flushPromises();
 
-      await service.activateCollection('pipeline-1', { initiatedBy: 'test' });
+      await service.activateCollection('pipeline-1', { initiatedBy: 'test', vehiclePlate: 'ABC123' });
 
       // Paso 2: primer billete de $5.000 (falta $3.500)
       await moneyHandler?.({ source: 'ELECTRONIC_BOARD_BILL', amount: 5000 });

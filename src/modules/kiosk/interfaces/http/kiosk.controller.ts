@@ -1,16 +1,18 @@
-import { Body, Controller, Get, Param, Post, Sse } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Post, Sse } from '@nestjs/common';
 import type { MessageEvent } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Observable } from 'rxjs';
 import { Public } from '@common/security/public.decorator';
 import { KioskEventsService } from '@modules/kiosk/application/kiosk-events.service';
 import { KioskStateService } from '@modules/kiosk/application/kiosk-state.service';
+import { SimulateQrScanDto } from '@modules/kiosk/application/dto/simulate-qr-scan.dto';
 import { UpdateKioskModeDto } from '@modules/kiosk/application/dto/update-kiosk-mode.dto';
 import { ActivatePaymentCollectionDto } from '@modules/payment-core/application/dto/activate-payment-collection.dto';
 import { CompleteSessionDto } from '@modules/payment-core/application/dto/complete-session.dto';
 import { RegisterCashDto } from '@modules/payment-core/application/dto/register-cash.dto';
 import { StartPaymentSessionDto } from '@modules/payment-core/application/dto/start-payment-session.dto';
 import { PaymentSessionService } from '@modules/payment-core/application/payment-session.service';
+import { PeripheralsService } from '@modules/peripherals/application/peripherals.service';
 import { PrintingService } from '@modules/printing/application/printing.service';
 
 @Controller('kiosk')
@@ -20,6 +22,7 @@ export class KioskController {
     private readonly kioskEventsService: KioskEventsService,
     private readonly paymentSessionService: PaymentSessionService,
     private readonly printingService: PrintingService,
+    private readonly peripheralsService: PeripheralsService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -100,6 +103,16 @@ export class KioskController {
   @Post('payment-sessions/:id/print-receipt')
   printReceipt(@Param('id') sessionId: string) {
     return this.printingService.printPaymentReceipt(sessionId);
+  }
+
+  // Pruebas sin lector fisico: simula la lectura de un QR (solo con SIMULATE_HARDWARE=true)
+  @Public()
+  @Post('sim/qr')
+  simulateQrScan(@Body() dto: SimulateQrScanDto) {
+    if (!this.peripheralsService.simulateQrScan(dto.qrCode.trim())) {
+      throw new BadRequestException('La lectura simulada de QR solo esta disponible con SIMULATE_HARDWARE=true');
+    }
+    return { accepted: true, qrCode: dto.qrCode.trim() };
   }
 
   @Public()

@@ -195,10 +195,11 @@ export function activateKioskCollection(
   paymentSessionId: string,
   initiatedBy: string,
   electronicBilling?: ElectronicBillingSelection,
+  vehiclePlate?: string,
 ) {
   return apiFetch<SimBackendSession>(`/kiosk/sim/payment-sessions/${paymentSessionId}/collect`, {
     method: 'POST',
-    body: JSON.stringify({ initiatedBy, electronicBilling }),
+    body: JSON.stringify({ initiatedBy, electronicBilling, vehiclePlate }),
   }).then((session) => {
     fireCollectingEnabled(session);
     return session;

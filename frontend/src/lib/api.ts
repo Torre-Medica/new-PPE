@@ -35,6 +35,7 @@ export interface KioskSessionSummary {
   changeAmount: number;
   concept?: string | null;
   vehiclePlate?: string | null;
+  vehicleType?: string | null;
   enteredAt: string;
   monthlySubscription?: MonthlySubscriptionDetails | null;
   acceptancePolicy?: {
@@ -87,17 +88,21 @@ export async function activateKioskCollection(
   paymentSessionId: string,
   initiatedBy: string,
   electronicBilling?: ElectronicBillingSelection,
+  vehiclePlate?: string,
 ) {
   const response = await fetch(`${API_PREFIX}/kiosk/payment-sessions/${paymentSessionId}/collect`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ initiatedBy, electronicBilling }),
+    body: JSON.stringify({ initiatedBy, electronicBilling, vehiclePlate }),
   });
 
   if (!response.ok) {
-    throw new Error('No fue posible habilitar la recepcion de efectivo');
+    // El backend explica por que rechazo (ej. formato de placa) en "message"
+    const body = (await response.json().catch(() => null)) as { message?: unknown } | null;
+    const message = typeof body?.message === 'string' ? body.message : null;
+    throw new Error(message ?? 'No fue posible habilitar la recepcion de efectivo');
   }
 
   return response.json();

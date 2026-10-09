@@ -17,6 +17,7 @@ type CloseoutReceiptPayloadBuilder = {
     closedBy: string;
     notes: string | null;
     completedPayments: unknown[];
+    canceledPayments: unknown[];
     acceptedMovements: unknown[];
     dispensedMovements: unknown[];
     hopperLoadMovements: unknown[];
@@ -72,6 +73,7 @@ describe('CashInventoryService closeout receipt', () => {
           ]),
         },
       ],
+      canceledPayments: [],
       acceptedMovements: [
         {
           denominationId: 20000,
@@ -116,6 +118,7 @@ describe('CashInventoryService closeout receipt', () => {
       closedBy: 'admin',
       notes: null,
       completedPayments: [],
+      canceledPayments: [],
       acceptedMovements: [
         {
           denominationId: 5000,

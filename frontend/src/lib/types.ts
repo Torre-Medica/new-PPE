@@ -69,6 +69,7 @@ export interface PaymentDetails {
   changeAmount: number;
   concept?: string;
   vehiclePlate?: string | null;
+  vehicleType?: string | null;
   status?: string;
   acceptancePolicy?: AcceptancePolicy | null;
   monthlySubscription?: MonthlySubscriptionDetails | null;

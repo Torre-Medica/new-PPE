@@ -7,6 +7,7 @@ import { SimPanel } from './components/SimPanel';
 import { KeyboardModal } from './components/KeyboardModal';
 import type { KbType } from './components/KeyboardModal';
 import { useLogoUnlock } from './hooks/useLogoUnlock';
+import { normalizePlate, PLATE_FORMAT_EXAMPLES, resolvePlateVehicleKind, validatePlate } from './lib/vehicle-plate';
 
 const SIMULATE = import.meta.env.VITE_SIMULATE === 'true';
 const {
@@ -83,6 +84,8 @@ const FIXED_PAYMENT_WARNINGS: string[] = [];
 // Valores por defecto si el backend no responde con .timeouts (ej. version
 // vieja) - en operacion normal, todo tiempo de espera lo controla el .env
 // del PPE (ver PAYMENT_SESSION_*_TIMEOUT_MS) y llega via GET /kiosk/state.
+// Inactividad maxima en la vista "Ingresa tu placa" antes de cancelar el pago
+const PLATE_ENTRY_IDLE_TIMEOUT_SECONDS = 30;
 const DEFAULT_SESSION_TIMEOUTS_SECONDS = {
   review: 120,
   cash: 120,
@@ -241,10 +244,40 @@ export default function App() {
     initialValue: string;
     type: KbType;
     acceptLabel?: string;
+    validate?: (v: string) => string | null;
+    uppercase?: boolean;
+    title?: string;
+    hint?: string;
+    placeholder?: string;
+    imageSrc?: string;
+    imageHalo?: boolean;
+    fullscreen?: boolean;
+    idleTimeoutSeconds?: number;
+    onIdleTimeout?: () => void;
+    // Actualiza el campo del formulario en vivo mientras se escribe
+    onChange?: (v: string) => void;
     onAccept: (v: string) => void;
   } | null>(null);
-  const kb = (label: string, value: string, type: KbType, setter: (v: string) => void) =>
-    setKeyboardModal({ label, initialValue: value, type, onAccept: (v) => { setter(v); setKeyboardModal(null); } });
+  // Vista de placa abierta: tiene su propio limite de inactividad (30 s)
+  const plateEntryActive = !!keyboardModal?.idleTimeoutSeconds;
+  // El UUID del QR no le dice nada al cliente: solo se muestra el identificador si es cedula
+  const showPaymentIdentifier = paymentDetails.identifierLabel === 'Cedula';
+  // liveSetter: lo que se actualiza en cada tecla (por defecto el mismo setter); se separa
+  // cuando el setter hace algo mas al aceptar (ej. buscar el tercero por documento).
+  const kb = (
+    label: string,
+    value: string,
+    type: KbType,
+    setter: (v: string) => void,
+    liveSetter: (v: string) => void = setter,
+  ) =>
+    setKeyboardModal({
+      label,
+      initialValue: value,
+      type,
+      onChange: liveSetter,
+      onAccept: (v) => { setter(v); setKeyboardModal(null); },
+    });
   const setBillingFormField = <K extends keyof BillingFormState>(
     key: K,
     value: BillingFormState[K],
@@ -549,6 +582,7 @@ export default function App() {
           changeAmount: 0,
           concept: asString(payload.concept),
           vehiclePlate: asString(payload.vehiclePlate) || null,
+          vehicleType: asString(payload.vehicleType) || null,
           status: 'VALIDATED',
           acceptancePolicy: parseAcceptancePolicy(payload.acceptancePolicy),
           monthlySubscription,
@@ -834,6 +868,18 @@ export default function App() {
       return;
     }
 
+    // Mientras se digita la placa manda el contador de 30 s de esa vista: el de la
+    // revision se pausa y se mantiene viva la sesion en el backend.
+    if (plateEntryActive) {
+      const sessionId = paymentDetails.paymentSessionId;
+      if (!sessionId) return;
+      void touchKioskSession(sessionId).catch(() => undefined);
+      const keepAlive = window.setInterval(() => {
+        void touchKioskSession(sessionId).catch(() => undefined);
+      }, 10_000);
+      return () => window.clearInterval(keepAlive);
+    }
+
     const monthlyReviewActive =
       paymentDetails.sessionType === 'MONTHLY_SUBSCRIPTION';
 
@@ -881,6 +927,7 @@ export default function App() {
     showBillingDetailsScreen,
     reviewInteractionVersion,
     sessionTimeoutsSeconds,
+    plateEntryActive,
   ]);
 
   useEffect(() => {
@@ -1275,6 +1322,7 @@ export default function App() {
       changeAmount: session.changeAmount,
       concept: session.concept ?? '',
       vehiclePlate: session.vehiclePlate ?? null,
+      vehicleType: session.vehicleType ?? null,
       status: session.status,
       acceptancePolicy: session.acceptancePolicy ?? null,
       monthlySubscription: session.monthlySubscription ?? null,
@@ -1563,7 +1611,49 @@ export default function App() {
     );
   };
 
-  const beginCollection = async () => {
+  // Al pulsar "Pagar" se pide la placa (visitantes); debe tener el formato del tipo de
+  // vehiculo del ticket. Las mensualidades ya traen su placa validada.
+  const openPlateEntry = () => {
+    if (isMonthlyPayment) {
+      void beginCollection();
+      return;
+    }
+
+    const kind = resolvePlateVehicleKind(paymentDetails.vehicleType);
+    const vehicleLabel = kind === 'MOTO' ? 'moto' : kind === 'CARRO' ? 'carro' : 'vehiculo';
+    const example = kind
+      ? PLATE_FORMAT_EXAMPLES[kind]
+      : `${PLATE_FORMAT_EXAMPLES.CARRO} o ${PLATE_FORMAT_EXAMPLES.MOTO}`;
+    setKeyboardModal({
+      label: `Placa del ${vehicleLabel}`,
+      title: 'Ingresa tu placa',
+      hint: `Escribe la placa tal como aparece en el ${vehicleLabel}.`,
+      placeholder: `Ej. ${example}`,
+      // Icono segun el tipo de vehiculo del ticket (la moto ya trae su propio circulo de fondo)
+      imageSrc: kind === 'MOTO' ? '/placa-moto.png' : '/placa-carro.png',
+      imageHalo: kind !== 'MOTO',
+      fullscreen: true,
+      idleTimeoutSeconds: PLATE_ENTRY_IDLE_TIMEOUT_SECONDS,
+      onIdleTimeout: () => {
+        setKeyboardModal(null);
+        const sessionId = paymentDetails.paymentSessionId;
+        if (sessionId) void cancelKioskSession(sessionId).catch(() => undefined);
+        setCancelNotice((prev) => prev ?? 'Sesion cancelada por inactividad. Regresando al inicio...');
+      },
+      // Vacio a proposito: el cliente debe digitar la placa, no solo confirmarla
+      initialValue: '',
+      type: 'text',
+      acceptLabel: 'Continuar al pago',
+      uppercase: true,
+      validate: (value) => validatePlate(value, kind),
+      onAccept: (value) => {
+        setKeyboardModal(null);
+        void beginCollection(normalizePlate(value));
+      },
+    });
+  };
+
+  const beginCollection = async (vehiclePlate?: string) => {
     if (!paymentDetails.paymentSessionId || paymentLoading) {
       return;
     }
@@ -1604,6 +1694,7 @@ export default function App() {
         paymentDetails.paymentSessionId,
         'touch-kiosk',
         electronicBilling,
+        vehiclePlate,
       );
       const activeSession = await fetchActiveKioskSession().catch(() => null);
 
@@ -1651,9 +1742,14 @@ export default function App() {
       }
 
       setStatusMessage('No fue posible confirmar la recepcion de efectivo. Intente nuevamente.');
-    } catch {
+    } catch (error) {
       clearPaymentLoading();
-      setStatusMessage('No fue posible habilitar la recepcion de efectivo. Intente nuevamente.');
+      // Muestra el motivo del backend (ej. placa con formato invalido) si lo hay
+      setStatusMessage(
+        error instanceof Error && error.message
+          ? error.message
+          : 'No fue posible habilitar la recepcion de efectivo. Intente nuevamente.',
+      );
     }
   };
 
@@ -1925,7 +2021,7 @@ export default function App() {
         value={billingDocument}
         placeholder="Documento CC/NIT"
         onClick={() =>
-          kb('Documento para factura', billingDocument, 'numeric', acceptBillingDocument)
+          kb('Documento para factura', billingDocument, 'numeric', acceptBillingDocument, setBillingDocument)
         }
       />
 
@@ -2156,7 +2252,9 @@ export default function App() {
                 <div className="rounded-[1.75rem] border border-brand-100 bg-white/75 p-4">
                   <p className="text-sm uppercase tracking-[0.2em] text-brand-700">Cobro actual</p>
                   <div className="mt-3 grid gap-3">
-                    <ReadOnlyField label={paymentDetails.identifierLabel} value={paymentDetails.identifierValue} />
+                    {showPaymentIdentifier && (
+                      <ReadOnlyField label={paymentDetails.identifierLabel} value={paymentDetails.identifierValue} />
+                    )}
                     <ReadOnlyField label="Monto adeudado" value={`$ ${currency.format(paymentDetails.amountDue)}`} />
                   </div>
                 </div>
@@ -2261,7 +2359,9 @@ export default function App() {
                     </div>
                   ) : (
                     <div className="grid gap-3 md:grid-cols-2">
-                      <ReadOnlyField label={paymentDetails.identifierLabel} value={paymentDetails.identifierValue} />
+                      {showPaymentIdentifier && (
+                        <ReadOnlyField label={paymentDetails.identifierLabel} value={paymentDetails.identifierValue} />
+                      )}
                       <ReadOnlyField label="Hora de entrada" value={paymentDetails.enteredAt} />
                       <ReadOnlyField label="Monto adeudado" value={`$ ${currency.format(paymentDetails.amountDue)}`} />
                     </div>
@@ -2298,7 +2398,7 @@ export default function App() {
                   <div className="mt-4 flex gap-3">
                     <button
                       className="touch-button-primary flex-1"
-                      onClick={() => void beginCollection()}
+                      onClick={openPlateEntry}
                       disabled={
                         (electronicBillingEnabled && showBillingChoiceScreen) ||
                         (electronicBillingEnabled && showBillingDetailsScreen) ||
@@ -2334,9 +2434,11 @@ export default function App() {
                       </h2>
                     </div>
                     <div className="flex flex-col items-start gap-1.5 md:items-end">
-                      <div className="rounded-full bg-white/70 px-3 py-1.5 text-sm text-muted">
-                        ID: {paymentDetails.identifierValue}
-                      </div>
+                      {showPaymentIdentifier && (
+                        <div className="rounded-full bg-white/70 px-3 py-1.5 text-sm text-muted">
+                          ID: {paymentDetails.identifierValue}
+                        </div>
+                      )}
                       <div className="rounded-full bg-white/70 px-3 py-1.5 text-sm font-medium text-muted">
                         {collectingCountdownSeconds > 0
                           ? `Cancelacion en: ${collectingCountdownSeconds} s`
@@ -2344,13 +2446,17 @@ export default function App() {
                             ? 'Procesando devolucion...'
                             : 'Cancelando...'}
                       </div>
-                      {/* Con el monto ya cubierto el pago se completa solo (entrega de
-                          cambio) y el backend no permite cancelar. */}
+                      {/* Con el monto ya cubierto por dinero ingresado el pago se completa
+                          solo (entrega de cambio) y no se permite cancelar. Si no ha entrado
+                          dinero (ej. ticket de $0 en pruebas) siempre se puede cancelar. */}
                       <button
                         type="button"
                         className="touch-button !min-h-[2.75rem] !px-5 text-sm bg-red-600 text-white shadow-md hover:bg-red-700 active:bg-red-800"
                         onClick={handleCancelPayment}
-                        disabled={pendingAmount === 0 || collectingCountdownSeconds === 0}
+                        disabled={
+                          (pendingAmount === 0 && paymentDetails.insertedAmount > 0) ||
+                          collectingCountdownSeconds === 0
+                        }
                       >
                         Cancelar
                       </button>
@@ -2570,12 +2676,14 @@ export default function App() {
                     label: 'Correo',
                     initialValue: adminEmail,
                     type: 'email',
+                    onChange: setAdminEmail,
                     onAccept: (email) => {
                       setAdminEmail(email);
                       setKeyboardModal({
                         label: 'Contrasena',
                         initialValue: adminPassword,
                         type: 'password',
+                        onChange: setAdminPassword,
                         acceptLabel: 'Entrar',
                         onAccept: (password) => {
                           setAdminPassword(password);
@@ -2600,6 +2708,7 @@ export default function App() {
                     label: 'Contrasena',
                     initialValue: adminPassword,
                     type: 'password',
+                    onChange: setAdminPassword,
                     acceptLabel: 'Entrar',
                     onAccept: (password) => {
                       setAdminPassword(password);
@@ -3177,8 +3286,24 @@ export default function App() {
           initialValue={keyboardModal.initialValue}
           type={keyboardModal.type}
           acceptLabel={keyboardModal.acceptLabel}
+          validate={keyboardModal.validate}
+          uppercase={keyboardModal.uppercase}
+          title={keyboardModal.title}
+          hint={keyboardModal.hint}
+          placeholder={keyboardModal.placeholder}
+          imageSrc={keyboardModal.imageSrc}
+          imageHalo={keyboardModal.imageHalo}
+          idleTimeoutSeconds={keyboardModal.idleTimeoutSeconds}
+          onIdleTimeout={keyboardModal.onIdleTimeout}
+          fullscreen={keyboardModal.fullscreen}
           onAccept={keyboardModal.onAccept}
-          onCancel={() => setKeyboardModal(null)}
+          onChange={keyboardModal.onChange}
+          // Cancelar devuelve el campo al valor que tenia; el clic por fuera conserva lo escrito
+          onCancel={() => {
+            keyboardModal.onChange?.(keyboardModal.initialValue);
+            setKeyboardModal(null);
+          }}
+          onDismiss={() => setKeyboardModal(null)}
         />
       )}
 

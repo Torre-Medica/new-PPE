@@ -36,8 +36,15 @@ type CloseoutReceiptRow = {
 type CloseoutReceiptSection = {
   title: string;
   rows: CloseoutReceiptRow[];
+  // Filas que se imprimen despues de un separador, justo antes del TOTAL
+  // (ej. transacciones exitosas / canceladas).
+  summaryRows?: CloseoutReceiptRow[];
   total?: number | string | null;
 };
+
+// Vehiculos de visitante que siempre aparecen en el ticket corto de transacciones,
+// aunque no haya pagos de ese tipo en el periodo.
+const VISITOR_TRANSACTION_ITEMS = ['Visitante Carro', 'Visitante Moto'];
 
 @Injectable()
 export class CashInventoryService {
@@ -345,6 +352,13 @@ export class CashInventoryService {
             createdAt: 'DESC',
           },
         });
+        // Canceladas manualmente o vencidas por tiempo: ambas guardan completedAt al cerrarse.
+        const canceledPayments = await manager.find(PaymentSessionEntity, {
+          where: {
+            status: In([PaymentSessionStatus.Canceled, PaymentSessionStatus.Timeout]),
+            completedAt: MoreThanOrEqual(cycleStartedAt),
+          },
+        });
         const dispenserSlots = await manager.find(DispenserSlotEntity, {
           order: {
             slotKey: 'ASC',
@@ -419,6 +433,7 @@ export class CashInventoryService {
           closedBy: dto.closedBy,
           notes: dto.notes ?? null,
           completedPayments,
+          canceledPayments,
           acceptedMovements,
           dispensedMovements,
           hopperLoadMovements,
@@ -849,6 +864,7 @@ export class CashInventoryService {
     closedBy: string;
     notes: string | null;
     completedPayments: PaymentSessionEntity[];
+    canceledPayments: PaymentSessionEntity[];
     acceptedMovements: CashMovementEntity[];
     dispensedMovements: CashMovementEntity[];
     hopperLoadMovements: CashMovementEntity[];
@@ -857,6 +873,15 @@ export class CashInventoryService {
     incidents: CashIncidentEntity[];
   }) {
     const transactionRows = this.groupPaymentsByProfileAndVehicle(args.completedPayments);
+    // Ticket corto: Visitante Carro/Moto siempre presentes (en 0 si no hubo pagos),
+    // seguidos de cualquier otro perfil que si haya tenido pagos.
+    const shortTransactionRows: CloseoutReceiptRow[] = [
+      ...VISITOR_TRANSACTION_ITEMS.map(
+        (item) =>
+          transactionRows.find((row) => row.item === item) ?? { item, quantity: 0, total: 0 },
+      ),
+      ...transactionRows.filter((row) => !VISITOR_TRANSACTION_ITEMS.includes(row.item)),
+    ];
     const acceptedRows = this.groupMovementsByDenomination(args.acceptedMovements).map((row) => ({
       item: `${row.kind === 'BILL' ? 'Billete' : 'Moneda'} $${row.denominationId.toLocaleString('es-CO')}`,
       quantity: row.quantity,
@@ -907,6 +932,25 @@ export class CashInventoryService {
       { item: 'Dinero devuelto', total: dispensedTotal },
       { item: 'Recaudo neto', total: netCollectionTotal },
     ];
+    // Valor de las sesiones canceladas: lo que se iba a cobrar (no es dinero recibido).
+    const canceledTotal = args.canceledPayments.reduce(
+      (sum, payment) => sum + payment.targetAmount,
+      0,
+    );
+    // TOTAL de transacciones definido por el negocio: exitosas - canceladas.
+    const transactionsNetTotal = transactionTotal - canceledTotal;
+    const transactionStatusRows: CloseoutReceiptRow[] = [
+      {
+        item: 'Trans. exitosas',
+        quantity: args.completedPayments.length,
+        total: transactionTotal,
+      },
+      {
+        item: 'Trans. canceladas',
+        quantity: args.canceledPayments.length,
+        total: canceledTotal,
+      },
+    ];
     const reconciliationRows: CloseoutReceiptRow[] = [
       { item: 'Tolvas inicial', total: args.hopperInitialTotal },
       { item: 'Recargas tolvas', total: hopperLoadTotal },
@@ -924,7 +968,8 @@ export class CashInventoryService {
       {
         title: 'Transacciones',
         rows: transactionRows,
-        total: transactionTotal,
+        summaryRows: transactionStatusRows,
+        total: transactionsNetTotal,
       },
       {
         title: 'Dinero recibido',
@@ -966,6 +1011,13 @@ export class CashInventoryService {
       periodStartedAt: args.periodStartedAt.toISOString(),
       periodEndedAt: args.periodEndedAt.toISOString(),
       transactionCount: args.completedPayments.length,
+      // Ticket corto que se imprime antes del cierre completo
+      transactionsTicket: {
+        title: 'Transacciones',
+        rows: shortTransactionRows,
+        summaryRows: transactionStatusRows,
+        total: transactionsNetTotal,
+      } satisfies CloseoutReceiptSection,
       sections,
       footerLines: args.notes ? [`Notas: ${args.notes}`] : [],
     };
@@ -1109,8 +1161,16 @@ export class CashInventoryService {
       .replace(/\s+/g, ' ')
       .trim();
 
-    if (comparison.includes('VISITANTE')) {
+    // nexo_back envia el incomeConditionType del servicio: "Visitor", "VisitorDescuento",
+    // "Privado", "Mensualidad", "MensualidadInterna"...
+    if (comparison.includes('VISITANTE') || comparison.includes('VISITOR')) {
       return 'Visitante';
+    }
+    if (comparison.includes('PRIVADO')) {
+      return 'Privado';
+    }
+    if (comparison.includes('MENSUALIDAD')) {
+      return 'Mensualidad';
     }
     if (comparison.includes('DOCENTE')) {
       return 'Docente';

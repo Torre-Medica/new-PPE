@@ -21,4 +21,10 @@ export class ActivatePaymentCollectionDto {
   @ValidateNested()
   @Type(() => PaymentCollectionElectronicBillingDto)
   electronicBilling?: PaymentCollectionElectronicBillingDto;
+
+  // Placa digitada en el kiosko antes de pagar (obligatoria en pagos de visitante)
+  @IsOptional()
+  @IsString()
+  @MaxLength(16)
+  vehiclePlate?: string;
 }

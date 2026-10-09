@@ -4,6 +4,7 @@ import { KioskController } from '@modules/kiosk/interfaces/http/kiosk.controller
 import { KioskEventsService } from '@modules/kiosk/application/kiosk-events.service';
 import { KioskStateService } from '@modules/kiosk/application/kiosk-state.service';
 import { PaymentCoreModule } from '@modules/payment-core/payment-core.module';
+import { PeripheralsModule } from '@modules/peripherals/peripherals.module';
 import { PrintingModule } from '@modules/printing/printing.module';
 import { KioskStateEntity } from '@modules/persistence/infrastructure/entities/kiosk-state.entity';
 
@@ -11,6 +12,7 @@ import { KioskStateEntity } from '@modules/persistence/infrastructure/entities/k
   imports: [
     TypeOrmModule.forFeature([KioskStateEntity]),
     forwardRef(() => PaymentCoreModule),
+    PeripheralsModule,
     forwardRef(() => PrintingModule),
   ],
   controllers: [KioskController],

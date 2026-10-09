@@ -9,6 +9,7 @@ import {
 import { ValidatePaymentDto } from '@modules/server-link/application/dto/validate-payment.dto';
 import { CompanyInfoSummary } from '@modules/server-link/application/dto/company-info.dto';
 import { PaymentInvoice } from '@modules/server-link/application/dto/payment-invoice.dto';
+import { UpdateIncomePlateDto } from '@modules/server-link/application/dto/update-income-plate.dto';
 
 export const SERVER_LINK_PORT = Symbol('ServerLinkPort');
 
@@ -18,6 +19,7 @@ export interface ServerLinkPort {
   getPaymentInvoice(serverPaymentId: number): Promise<PaymentInvoice | null>;
   commitPayment(dto: CommitPaymentDto): Promise<unknown>;
   cancelPayment(dto: CancelPaymentDto): Promise<unknown>;
+  updateIncomePlate(dto: UpdateIncomePlateDto): Promise<unknown>;
   prepareMonthlySubscription(identificationCode: string): Promise<MonthlySubscriptionPreparation>;
   validateMonthlySubscription(dto: ValidateMonthlySubscriptionDto): Promise<unknown>;
   generateMonthlySubscriptionPayment(

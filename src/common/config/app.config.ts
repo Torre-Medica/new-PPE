@@ -42,6 +42,7 @@ export const appConfig = () => ({
   printing: {
     javaServerUrl: process.env.PRINTER_JAVA_SERVER_URL ?? 'http://localhost:8080/imprimir',
     printerName: process.env.PRINTER_NAME ?? 'printer',
+    leftPadding: Number(process.env.PRINTER_LEFT_PADDING ?? 1),
     machineName: process.env.PPE_MACHINE_NAME ?? 'PPE',
   },
   payment: {
