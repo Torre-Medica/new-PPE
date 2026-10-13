@@ -455,9 +455,18 @@ export class PrintingService {
     const operations: PrinterOperation[] = [];
 
     if (transactionsTicket) {
+      // El ticket corto solo muestra las transacciones exitosas: sin la fila de
+      // canceladas ni el TOTAL (esos quedan en el cierre completo).
+      const shortTicketSection: CloseoutReceiptSection = {
+        ...transactionsTicket,
+        summaryRows: transactionsTicket.summaryRows?.filter(
+          (row) => !/cancelad/i.test(row.item),
+        ),
+        total: undefined,
+      };
       operations.push(
         ...this.buildCloseoutHeaderOperations(closeout, receipt, false),
-        ...this.buildCloseoutSectionOperations(transactionsTicket),
+        ...this.buildCloseoutSectionOperations(shortTicketSection),
         { accion: 'feed', datos: '2' },
         { accion: 'cut', datos: 'full' },
       );

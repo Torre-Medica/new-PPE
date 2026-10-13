@@ -101,7 +101,8 @@ describe('CashInventoryService closeout receipt', () => {
         { item: 'Cantidad pagos', quantity: 2 },
         { item: 'Total pagos', total: 47000 },
         { item: 'Dinero ingresado', total: 50000 },
-        { item: 'Dinero devuelto', total: 3000 },
+        { item: 'Devuelto exitosas', total: 3000 },
+        { item: 'Devuelto canceladas', total: 0 },
         { item: 'Recaudo neto', total: 47000 },
       ],
     });
@@ -151,7 +152,8 @@ describe('CashInventoryService closeout receipt', () => {
         { item: 'Cantidad pagos', quantity: 0 },
         { item: 'Total pagos', total: 0 },
         { item: 'Dinero ingresado', total: 5000 },
-        { item: 'Dinero devuelto', total: 0 },
+        { item: 'Devuelto exitosas', total: 0 },
+        { item: 'Devuelto canceladas', total: 0 },
         { item: 'Recaudo neto', total: 5000 },
       ],
     });

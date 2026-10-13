@@ -26,6 +26,7 @@ import { DispenserSlotService } from '@modules/peripherals/application/dispenser
 import { PeripheralsService } from '@modules/peripherals/application/peripherals.service';
 import { KioskMode, KioskStateEntity } from '@modules/persistence/infrastructure/entities/kiosk-state.entity';
 import { PaymentSessionEntity, PaymentSessionStatus } from '@modules/persistence/infrastructure/entities/payment-session.entity';
+import { PaymentSessionEventEntity } from '@modules/persistence/infrastructure/entities/payment-session-event.entity';
 
 type CloseoutReceiptRow = {
   item: string;
@@ -362,6 +363,16 @@ export class CashInventoryService {
             insertedAmount: MoreThan(0),
           },
         });
+        // Dinero devuelto al cliente al cancelar: lo que la placa expulso en la devolucion
+        // (evento payment.refunded), no lo que se iba a cobrar ni lo que ingreso.
+        const canceledRefundEvents = canceledPayments.length
+          ? await manager.find(PaymentSessionEventEntity, {
+              where: {
+                paymentSessionId: In(canceledPayments.map((payment) => payment.id)),
+                type: 'payment.refunded',
+              },
+            })
+          : [];
         const dispenserSlots = await manager.find(DispenserSlotEntity, {
           order: {
             slotKey: 'ASC',
@@ -437,6 +448,7 @@ export class CashInventoryService {
           notes: dto.notes ?? null,
           completedPayments,
           canceledPayments,
+          canceledRefundEvents,
           acceptedMovements,
           dispensedMovements,
           hopperLoadMovements,
@@ -868,6 +880,7 @@ export class CashInventoryService {
     notes: string | null;
     completedPayments: PaymentSessionEntity[];
     canceledPayments: PaymentSessionEntity[];
+    canceledRefundEvents?: PaymentSessionEventEntity[];
     acceptedMovements: CashMovementEntity[];
     dispensedMovements: CashMovementEntity[];
     hopperLoadMovements: CashMovementEntity[];
@@ -890,7 +903,17 @@ export class CashInventoryService {
       quantity: row.quantity,
       total: row.subtotal,
     }));
-    const dispensedBySlotRows = this.groupDispensedCommandsBySlot(args.completedPayments).map((row) => ({
+    // El dinero devuelto incluye el cambio de los pagos y las devoluciones de las
+    // canceladas: ambos salen de las tolvas. Sin las devoluciones, el recaudo neto y el
+    // cuadre de tolvas quedaban descuadrados por el valor devuelto.
+    const refundCommands = this.refundCommandsFromEvents(
+      args.canceledRefundEvents ?? [],
+      args.dispenserSlots,
+    );
+    const dispensedBySlotRows = this.groupDispensedCommandsBySlot(
+      args.completedPayments,
+      refundCommands,
+    ).map((row) => ({
       item: `${row.slotLabel} $${row.denomination.toLocaleString('es-CO')}`,
       quantity: row.quantity,
       total: row.total,
@@ -917,6 +940,12 @@ export class CashInventoryService {
     const transactionTotal = transactionRows.reduce((sum, row) => sum + Number(row.total ?? 0), 0);
     const acceptedTotal = acceptedRows.reduce((sum, row) => sum + Number(row.total ?? 0), 0);
     const dispensedTotal = dispensedBySlotRows.reduce((sum, row) => sum + Number(row.total ?? 0), 0);
+    // Del total que salio de las tolvas: devoluciones de canceladas y cambio de exitosas
+    const refundedToCanceledTotal = refundCommands.reduce(
+      (sum, command) => sum + Number(command.quantity ?? 0) * Number(command.denomination ?? 0),
+      0,
+    );
+    const changeToSuccessfulTotal = dispensedTotal - refundedToCanceledTotal;
     const hopperLoadTotal = hopperLoadRows.reduce((sum, row) => sum + Number(row.total ?? 0), 0);
     const hopperTotal = this.calculateDispenserSlotsTotal(args.dispenserSlots);
     const incidentTotal = incidentRows.reduce((sum, row) => sum + Number(row.total ?? 0), 0);
@@ -932,12 +961,13 @@ export class CashInventoryService {
       { item: 'Cantidad pagos', quantity: args.completedPayments.length },
       { item: 'Total pagos', total: transactionTotal },
       { item: 'Dinero ingresado', total: acceptedTotal },
-      { item: 'Dinero devuelto', total: dispensedTotal },
+      { item: 'Devuelto exitosas', total: changeToSuccessfulTotal },
+      { item: 'Devuelto canceladas', total: refundedToCanceledTotal },
       { item: 'Recaudo neto', total: netCollectionTotal },
     ];
-    // Valor de las sesiones canceladas: el dinero que el cliente alcanzo a ingresar.
-    const canceledTotal = args.canceledPayments.reduce(
-      (sum, payment) => sum + payment.insertedAmount,
+    // Valor de las sesiones canceladas: el dinero que se le devolvio al cliente.
+    const canceledTotal = (args.canceledRefundEvents ?? []).reduce(
+      (sum, event) => sum + this.extractRefundedAmount(event),
       0,
     );
     // TOTAL de transacciones definido por el negocio: exitosas - canceladas.
@@ -1026,6 +1056,49 @@ export class CashInventoryService {
     };
   }
 
+  /**
+   * Devoluciones de canceladas como comandos de tolva ({slotKey, denomination, quantity}).
+   * El evento payment.refunded guarda el plan por denominacion; la tolva es la que tiene
+   * esa denominacion cargada.
+   */
+  private refundCommandsFromEvents(
+    events: PaymentSessionEventEntity[],
+    dispenserSlots: DispenserSlotEntity[],
+  ): Array<Record<string, unknown>> {
+    const commands: Array<Record<string, unknown>> = [];
+    for (const event of events) {
+      const plan = this.parseJsonRecord(event.payloadJson)?.refundPlan;
+      if (!Array.isArray(plan)) {
+        continue;
+      }
+      for (const item of plan) {
+        if (!item || typeof item !== 'object') {
+          continue;
+        }
+        const { denominationId, quantity } = item as Record<string, unknown>;
+        if (typeof denominationId !== 'number' || typeof quantity !== 'number') {
+          continue;
+        }
+        const slot = dispenserSlots.find((candidate) => candidate.denominationId === denominationId);
+        if (!slot) {
+          continue;
+        }
+        commands.push({ slotKey: slot.slotKey, denomination: denominationId, quantity });
+      }
+    }
+    return commands;
+  }
+
+  /** Monto devuelto en un evento payment.refunded (refundTotal; si falta, el monto del evento). */
+  private extractRefundedAmount(event: PaymentSessionEventEntity): number {
+    const payload = this.parseJsonRecord(event.payloadJson);
+    const refundTotal = payload?.refundTotal;
+    if (typeof refundTotal === 'number' && Number.isFinite(refundTotal)) {
+      return refundTotal;
+    }
+    return event.amount ?? 0;
+  }
+
   private groupPaymentsByProfileAndVehicle(
     payments: PaymentSessionEntity[],
   ): Array<{ item: string; quantity: number; total: number }> {
@@ -1062,11 +1135,15 @@ export class CashInventoryService {
 
   private groupDispensedCommandsBySlot(
     payments: PaymentSessionEntity[],
+    extraCommands: Array<Record<string, unknown>> = [],
   ): Array<{ slotLabel: string; denomination: number; quantity: number; total: number }> {
     const grouped = new Map<string, { slotLabel: string; denomination: number; quantity: number; total: number }>();
 
-    for (const payment of payments) {
-      const commandsRaw = this.parseJsonArray(payment.changeCommandsJson);
+    const commandLists = [
+      ...payments.map((payment) => this.parseJsonArray(payment.changeCommandsJson)),
+      extraCommands,
+    ];
+    for (const commandsRaw of commandLists) {
       for (const command of commandsRaw) {
         if (!command || typeof command !== 'object') {
           continue;
