@@ -42,6 +42,10 @@ export class KioskController {
           'features.monthlySubscriptionsEnabled',
           false,
         ),
+        electronicBillingDefaultCity: this.configService.get<string>(
+          'features.electronicBillingDefaultCity',
+          'Medellin',
+        ),
       },
       timeouts: {
         validatingMs: this.configService.get<number>('payment.sessionValidatingTimeoutMs', 15_000),

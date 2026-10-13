@@ -18,6 +18,8 @@ export const appConfig = () => ({
   features: {
     electronicBillingEnabled: readBooleanEnv(process.env.FACTURACION, false),
     monthlySubscriptionsEnabled: readBooleanEnv(process.env.MENSUALIDADES, false),
+    // Ciudad con la que se registra un tercero nuevo desde el kiosko (catalogo de Siigo)
+    electronicBillingDefaultCity: process.env.FACTURACION_CIUDAD_DEFECTO ?? 'Medellin',
   },
   database: {
     path: resolveDefaultDatabasePath(),

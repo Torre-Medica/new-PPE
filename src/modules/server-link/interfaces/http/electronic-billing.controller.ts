@@ -1,8 +1,11 @@
-import { Body, Controller, ForbiddenException, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Param, Post, Put } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Public } from '@common/security/public.decorator';
 import { NexoBackRestService } from '@modules/server-link/application/nexo-back-rest.service';
-import { CreateElectronicBillingCustomerDto } from '@modules/server-link/application/dto/electronic-billing.dto';
+import {
+  CreateElectronicBillingCustomerDto,
+  UpdateElectronicBillingCustomerEmailDto,
+} from '@modules/server-link/application/dto/electronic-billing.dto';
 
 @Public()
 @Controller('electronic-billing')
@@ -28,6 +31,15 @@ export class ElectronicBillingController {
   createCustomer(@Body() dto: CreateElectronicBillingCustomerDto) {
     this.assertElectronicBillingEnabled();
     return this.nexoBackRestService.createElectronicBillingCustomer(dto);
+  }
+
+  @Put('customers/:identification/email')
+  updateCustomerEmail(
+    @Param('identification') identification: string,
+    @Body() dto: UpdateElectronicBillingCustomerEmailDto,
+  ) {
+    this.assertElectronicBillingEnabled();
+    return this.nexoBackRestService.updateElectronicBillingCustomerEmail(identification, dto.email);
   }
 
   private assertElectronicBillingEnabled() {

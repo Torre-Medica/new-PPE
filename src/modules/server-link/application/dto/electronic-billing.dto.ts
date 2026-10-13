@@ -84,3 +84,10 @@ export class CreateElectronicBillingCustomerDto {
   @Type(() => ElectronicBillingContactDto)
   contacts?: ElectronicBillingContactDto[];
 }
+
+// Cambio de correo de un tercero ya registrado (el nombre no se cambia desde el kiosko)
+export class UpdateElectronicBillingCustomerEmailDto {
+  @IsEmail()
+  @MaxLength(160)
+  email!: string;
+}

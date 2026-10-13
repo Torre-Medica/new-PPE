@@ -5,6 +5,25 @@ import * as simApi from './lib/sim-api';
 import { getSimEventSource } from './lib/sim-events';
 import { SimPanel } from './components/SimPanel';
 import { KeyboardModal } from './components/KeyboardModal';
+import {
+  BillingConfirmScreen,
+  BillingDocumentScreen,
+  BillingNewCustomerScreen,
+} from './components/billing/BillingScreens';
+import {
+  customerDisplayName,
+  customerEmail,
+  defaultCityId,
+  detectBillingDocument,
+  documentError,
+  identificationTypeId,
+  isValidEmail,
+  maskDocument,
+  maskEmail,
+  maskName,
+  splitPersonName,
+} from './lib/billing-rules';
+import type { BillingDocument } from './lib/billing-rules';
 import type { KbType } from './components/KeyboardModal';
 import { useLogoUnlock } from './hooks/useLogoUnlock';
 import { normalizePlate, PLATE_FORMAT_EXAMPLES, resolvePlateVehicleKind, validatePlate } from './lib/vehicle-plate';
@@ -14,6 +33,7 @@ const {
   activateKioskCollection,
   cancelKioskSession,
   createElectronicBillingCustomer,
+  updateElectronicBillingCustomerEmail,
   createCashCloseout,
   ejectDispenserUnit,
   fetchActiveKioskSession,
@@ -89,7 +109,7 @@ const PLATE_ENTRY_IDLE_TIMEOUT_SECONDS = 30;
 const DEFAULT_SESSION_TIMEOUTS_SECONDS = {
   review: 120,
   cash: 120,
-  billingDetails: 5 * 60,
+  billingDetails: 2 * 60,
   monthlySubscription: 2 * 60,
   finalizing: 30,
 };
@@ -229,6 +249,17 @@ export default function App() {
   const [billingError, setBillingError] = useState('');
   const [showBillingForm, setShowBillingForm] = useState(false);
   const [billingForm, setBillingForm] = useState<BillingFormState>(() => createEmptyBillingForm());
+  // Factura a terceros: 'document' (pantalla 3) -> 'confirm' (4A, ya registrado) o 'form' (4B, nuevo)
+  const [billingStep, setBillingStep] = useState<'document' | 'confirm' | 'form'>('document');
+  const [billingResolvedDocument, setBillingResolvedDocument] = useState<BillingDocument | null>(null);
+  const [billingNewCustomer, setBillingNewCustomer] = useState({ name: '', email: '', phone: '' });
+  const [billingFieldErrors, setBillingFieldErrors] = useState<{ document?: string; name?: string; email?: string }>({});
+  const [billingDefaultCity, setBillingDefaultCity] = useState('Medellin');
+  // Correo al que llegara la factura (se muestra en la pantalla final)
+  const [billingInvoiceEmail, setBillingInvoiceEmail] = useState('');
+  // Cambio de correo en la pantalla 4A
+  const [billingEmailSaving, setBillingEmailSaving] = useState(false);
+  const [billingEmailNotice, setBillingEmailNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [monthlyPlate, setMonthlyPlate] = useState('');
   const [sessionTimeoutsSeconds, setSessionTimeoutsSeconds] = useState(DEFAULT_SESSION_TIMEOUTS_SECONDS);
   const collectingTouchAtRef = useRef(0);
@@ -291,6 +322,12 @@ export default function App() {
     setBillingError('');
     setShowBillingForm(false);
     setBillingForm(createEmptyBillingForm());
+    setBillingStep('document');
+    setBillingResolvedDocument(null);
+    setBillingNewCustomer({ name: '', email: '', phone: '' });
+    setBillingFieldErrors({});
+    setBillingInvoiceEmail('');
+    setBillingEmailNotice(null);
   };
   const resetMonthlyFlow = () => {
     setMonthlyPlate('');
@@ -301,6 +338,7 @@ export default function App() {
   };
   const applyKioskState = (state: KioskStateSummary) => {
     setElectronicBillingFeature(state.features?.electronicBillingEnabled === true);
+    setBillingDefaultCity(state.features?.electronicBillingDefaultCity ?? 'Medellin');
 
     const timeouts = state.timeouts;
     setSessionTimeoutsSeconds({
@@ -556,9 +594,8 @@ export default function App() {
             monthlySubscription
             ? 'MONTHLY_SUBSCRIPTION'
             : 'VISITOR';
-        setShowBillingChoiceScreen(
-          electronicBillingEnabledRef.current && sessionType !== 'MONTHLY_SUBSCRIPTION',
-        );
+        // La eleccion de factura va dentro de la revision (pantalla 2)
+        setShowBillingChoiceScreen(false);
         if (sessionType === 'MONTHLY_SUBSCRIPTION') {
           setMonthlyPlate(
             monthlySubscription?.plate ??
@@ -856,9 +893,12 @@ export default function App() {
       setReviewInteractionVersion((current) => current + 1);
     };
 
+    // Toques y teclado fisico cuentan como interaccion: reinician la cuenta regresiva
     window.addEventListener('pointerdown', handlePointerDown, { capture: true });
+    window.addEventListener('keydown', handlePointerDown, { capture: true });
     return () => {
       window.removeEventListener('pointerdown', handlePointerDown, { capture: true });
+      window.removeEventListener('keydown', handlePointerDown, { capture: true });
     };
   }, [paymentStage]);
 
@@ -1270,10 +1310,7 @@ export default function App() {
 
     if (session.status === 'VALIDATED') {
       setPaymentStage('review');
-      setShowBillingChoiceScreen(
-        electronicBillingEnabledRef.current &&
-          details.sessionType !== 'MONTHLY_SUBSCRIPTION',
-      );
+      setShowBillingChoiceScreen(false);
       setStatusMessage(
         details.sessionType === 'MONTHLY_SUBSCRIPTION'
           ? 'Mensualidad validada. Revise el valor a cobrar'
@@ -1611,6 +1648,180 @@ export default function App() {
     );
   };
 
+  // ── Factura a terceros (pantallas 2, 3, 4A, 4B) ───────────────────────────
+  // Pantalla 2: "Consumidor final" (por defecto) o "A mi nombre o empresa"
+  const chooseBillingRecipient = (requested: boolean) => {
+    if (!electronicBillingEnabled) return;
+    if (!requested) {
+      resetBillingFlow();
+      return;
+    }
+    setElectronicBillingRequested(true);
+  };
+
+  const startBillingFlow = () => {
+    setBillingStep('document');
+    setBillingFieldErrors({});
+    setBillingError('');
+    setShowBillingDetailsScreen(true);
+  };
+
+  // Tercero confirmado o registrado: sigue la placa (pantalla 4)
+  const finishBillingFlow = () => {
+    setShowBillingDetailsScreen(false);
+    openPlateEntry();
+  };
+
+  // Pantalla 3 -> busca el tercero por cedula o NIT
+  const submitBillingDocument = async () => {
+    const error = documentError(billingDocument);
+    if (error) {
+      setBillingFieldErrors({ document: error });
+      return;
+    }
+    const document = detectBillingDocument(billingDocument)!;
+    setBillingResolvedDocument(document);
+    // Sin digito de verificacion: asi se busca, se registra y se factura
+    setBillingDocument(document.identification);
+    setBillingFieldErrors({});
+    setBillingError('');
+    setBillingLoading(true);
+    try {
+      const customer = await searchElectronicBillingCustomer(document.identification);
+      if (customer.exist) {
+        setBillingCustomer(customer);
+        setBillingInvoiceEmail(customerEmail(customer.data));
+        setBillingStep('confirm');
+      } else {
+        setBillingCustomer(null);
+        const suggested =
+          typeof customer.data.razonSocial === 'string' &&
+          !isGenericSuggestedCustomerName(customer.data.razonSocial)
+            ? customer.data.razonSocial.toUpperCase()
+            : '';
+        setBillingNewCustomer({ name: suggested, email: '', phone: '' });
+        setBillingStep('form');
+      }
+    } catch {
+      setBillingFieldErrors({ document: 'No fue posible consultar' });
+    } finally {
+      setBillingLoading(false);
+    }
+  };
+
+  // Pantalla 4B -> registra el tercero con valores por defecto y sigue a la placa
+  const saveNewBillingCustomer = async () => {
+    const document = billingResolvedDocument;
+    if (!document) return;
+    const name = billingNewCustomer.name.trim();
+    const email = billingNewCustomer.email.trim();
+    const errors: { name?: string; email?: string } = {};
+    const personName = document.kind === 'CC' ? splitPersonName(name) : null;
+    if (!name) errors.name = 'Obligatorio';
+    else if (document.kind === 'CC' && !personName) errors.name = 'Escriba nombre y apellido';
+    if (!isValidEmail(email)) errors.email = 'Correo inválido';
+    setBillingFieldErrors(errors);
+    if (errors.name || errors.email) return;
+
+    const catalogs = billingCatalogs;
+    const typeId = catalogs ? identificationTypeId(document.kind, catalogs.identificationTypes) : null;
+    const cityId = catalogs ? defaultCityId(billingDefaultCity, catalogs.cities) : null;
+    if (!catalogs || !typeId || !cityId) {
+      setBillingError('No fue posible preparar el registro. Intente de nuevo.');
+      return;
+    }
+
+    const personType = document.kind === 'NIT' ? 'Company' : 'Person';
+    const responsibilities = defaultFiscalResponsibilityIds(personType, catalogs.fiscalResponsibilities).map(Number);
+    const payload: ElectronicBillingCustomerPayload = {
+      personType,
+      identification: document.identification,
+      firstName: personName ? personName.firstName : name,
+      lastName: personName ? personName.lastName : undefined,
+      idIdentificationType: typeId,
+      cityId,
+      email,
+      phoneNumber: billingNewCustomer.phone.trim() || undefined,
+      vatResponsible: false,
+      idCodeFiscalResponsabilities: responsibilities.length > 0 ? responsibilities : undefined,
+    };
+
+    setBillingLoading(true);
+    setBillingError('');
+    try {
+      await createElectronicBillingCustomer(payload);
+      setBillingCustomer({
+        exist: true,
+        data: {
+          identification: document.identification,
+          first_name: payload.firstName,
+          last_name: payload.lastName ?? '',
+        },
+      });
+      setBillingInvoiceEmail(email);
+      finishBillingFlow();
+    } catch (error) {
+      setBillingError(error instanceof Error ? error.message : 'No fue posible registrar sus datos');
+    } finally {
+      setBillingLoading(false);
+    }
+  };
+
+  // Campos de la pantalla 4B: el teclado actualiza el campo en vivo
+  const editBillingField = (field: 'name' | 'email' | 'phone') => {
+    const labels = { name: 'Nombre o razón social', email: 'Correo electrónico', phone: 'Teléfono (opcional)' };
+    // Telefono con el teclado completo (tiene el teclado numerico a la derecha)
+    const types: Record<typeof field, KbType> = { name: 'text', email: 'email', phone: 'text' };
+    const update = (value: string) => {
+      setBillingNewCustomer((current) => ({ ...current, [field]: field === 'name' ? value.toUpperCase() : value.trim() }));
+      setBillingFieldErrors((current) => ({ ...current, [field]: undefined }));
+    };
+    setKeyboardModal({
+      label: labels[field],
+      initialValue: billingNewCustomer[field],
+      type: types[field],
+      uppercase: field === 'name',
+      onChange: update,
+      onAccept: (value) => {
+        update(value);
+        setKeyboardModal(null);
+      },
+    });
+  };
+
+  // Pantalla 4A -> "Cambiar correo": se escribe el correo nuevo completo (el actual no se
+  // muestra) y se guarda en el tercero de Siigo, que es a donde llega la factura
+  const changeBillingEmail = () => {
+    const identification = billingResolvedDocument?.identification;
+    if (!identification) return;
+    setBillingEmailNotice(null);
+    setKeyboardModal({
+      label: 'Correo electrónico',
+      title: 'Escriba su nuevo correo',
+      hint: 'La factura electrónica llegará a este correo.',
+      placeholder: 'Ej. juanperez@gmail.com',
+      fullscreen: true,
+      initialValue: '',
+      type: 'email',
+      acceptLabel: 'Guardar correo',
+      validate: (value) => (isValidEmail(value) ? null : 'Correo inválido'),
+      onAccept: async (value) => {
+        setKeyboardModal(null);
+        const email = value.trim();
+        setBillingEmailSaving(true);
+        try {
+          await updateElectronicBillingCustomerEmail(identification, email);
+          setBillingInvoiceEmail(email);
+          setBillingEmailNotice({ ok: true, text: 'Correo actualizado' });
+        } catch {
+          setBillingEmailNotice({ ok: false, text: 'No fue posible cambiar el correo. Intente de nuevo.' });
+        } finally {
+          setBillingEmailSaving(false);
+        }
+      },
+    });
+  };
+
   // Al pulsar "Pagar" se pide la placa (visitantes); debe tener el formato del tipo de
   // vehiculo del ticket. Las mensualidades ya traen su placa validada.
   const openPlateEntry = () => {
@@ -1648,7 +1859,9 @@ export default function App() {
       validate: (value) => validatePlate(value, kind),
       onAccept: (value) => {
         setKeyboardModal(null);
-        void beginCollection(normalizePlate(value));
+        // Por ref: este cierre se crea en el mismo render en que se guarda el tercero
+        // de la factura, y beginCollection debe ver ese estado ya actualizado
+        void beginCollectionRef.current(normalizePlate(value));
       },
     });
   };
@@ -1752,6 +1965,8 @@ export default function App() {
       );
     }
   };
+  const beginCollectionRef = useRef(beginCollection);
+  beginCollectionRef.current = beginCollection;
 
   const handleCollectingInteraction = useCallback(() => {
     if (paymentStage !== 'collecting' || !paymentDetails.paymentSessionId) {
@@ -2234,56 +2449,59 @@ export default function App() {
               </div>
             </div>
           ) : electronicBillingEnabled && showBillingDetailsScreen && paymentStage === 'review' ? (
-            <div className="glass-panel flex min-h-[calc(100vh-2rem)] max-w-6xl flex-col">
-              <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                <div>
-                  <h1 className="mt-2 text-[clamp(2rem,4vw,3.8rem)] font-bold leading-none tracking-[-0.05em] text-ink">
-                    Datos de facturacion
-                  </h1>
-                  <p className="mt-2 max-w-2xl text-base leading-relaxed text-muted">
-                    Valide o registre el tercero antes de continuar al pago.
-                  </p>
-                </div>
-                <div className="rounded-full bg-white/70 px-4 py-1.5 text-sm font-medium text-muted">
-                  {reviewCountdownSeconds > 0 ? `Cancelacion en: ${formatReviewCountdown(reviewCountdownSeconds)}` : 'Cancelando...'}
-                </div>
-              </div>
-
-              <div className="grid flex-1 gap-4 lg:grid-cols-[0.8fr_1.2fr]">
-                <div className="rounded-[1.75rem] border border-brand-100 bg-white/75 p-4">
-                  <p className="text-sm uppercase tracking-[0.2em] text-brand-700">Cobro actual</p>
-                  <div className="mt-3 grid gap-3">
-                    {showPaymentIdentifier && (
-                      <ReadOnlyField label={paymentDetails.identifierLabel} value={paymentDetails.identifierValue} />
-                    )}
-                    <ReadOnlyField label="Monto adeudado" value={`$ ${currency.format(paymentDetails.amountDue)}`} />
-                  </div>
-                </div>
-
-                <div className="rounded-[1.75rem] border border-brand-100 bg-white/75 p-4">
-                  {billingDetailsForm}
-                </div>
-              </div>
-
-              <div className="mt-4 grid gap-3 md:grid-cols-[auto_1fr]">
-                <button
-                  type="button"
-                  className="touch-button-secondary w-full md:w-auto"
-                  onClick={cancelElectronicBilling}
-                  disabled={billingLoading}
-                >
-                  No facturar
-                </button>
-                <button
-                  type="button"
-                  className="touch-button-primary w-full"
-                  onClick={continueToPaymentReview}
-                  disabled={billingLoading || !billingCustomer?.exist}
-                >
-                  Continuar al pago
-                </button>
-              </div>
-            </div>
+            billingStep === 'confirm' && billingCustomer?.exist && billingResolvedDocument ? (
+              <BillingConfirmScreen
+                maskedName={maskName(customerDisplayName(billingCustomer.data))}
+                maskedDocument={maskDocument(billingResolvedDocument)}
+                maskedEmail={billingInvoiceEmail ? maskEmail(billingInvoiceEmail) : ''}
+                isCompany={billingResolvedDocument.kind === 'NIT'}
+                countdownLabel={reviewCountdownSeconds > 0 ? `Cancelacion en: ${formatReviewCountdown(reviewCountdownSeconds)}` : 'Cancelando...'}
+                emailSaving={billingEmailSaving}
+                emailNotice={billingEmailNotice}
+                onChangeEmail={changeBillingEmail}
+                onNotMe={() => {
+                  setBillingCustomer(null);
+                  setBillingInvoiceEmail('');
+                  setBillingEmailNotice(null);
+                  setBillingStep('document');
+                }}
+                onConfirm={finishBillingFlow}
+              />
+            ) : billingStep === 'form' && billingResolvedDocument ? (
+              <BillingNewCustomerScreen
+                documentLabel={maskDocument(billingResolvedDocument)}
+                name={billingNewCustomer.name}
+                email={billingNewCustomer.email}
+                phone={billingNewCustomer.phone}
+                nameError={billingFieldErrors.name ?? null}
+                emailError={billingFieldErrors.email ?? null}
+                generalError={billingError || null}
+                loading={billingLoading}
+                countdownLabel={reviewCountdownSeconds > 0 ? `Cancelacion en: ${formatReviewCountdown(reviewCountdownSeconds)}` : 'Cancelando...'}
+                onEditName={() => editBillingField('name')}
+                onEditEmail={() => editBillingField('email')}
+                onEditPhone={() => editBillingField('phone')}
+                onBack={() => {
+                  setBillingFieldErrors({});
+                  setBillingError('');
+                  setBillingStep('document');
+                }}
+                onSave={() => void saveNewBillingCustomer()}
+              />
+            ) : (
+              <BillingDocumentScreen
+                value={billingDocument}
+                error={billingFieldErrors.document ?? null}
+                loading={billingLoading}
+                countdownLabel={reviewCountdownSeconds > 0 ? `Cancelacion en: ${formatReviewCountdown(reviewCountdownSeconds)}` : 'Cancelando...'}
+                onChange={(value) => {
+                  setBillingDocument(value);
+                  setBillingFieldErrors({});
+                }}
+                onBack={() => setShowBillingDetailsScreen(false)}
+                onContinue={() => void submitBillingDocument()}
+              />
+            )
           ) : (
             <div className="w-full max-w-6xl">
               <header className="mb-4 w-full text-center">
@@ -2379,33 +2597,66 @@ export default function App() {
                       </div>
                     </div>
                   )}
-                  {electronicBillingEnabled && electronicBillingRequested && (
-                    <div className="mt-4 rounded-[1.75rem] border border-brand-100 bg-white/75 p-4">
-                      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                        <div>
-                          <p className="text-sm uppercase tracking-[0.2em] text-brand-700">Datos de facturacion listos</p>
-                          <p className="mt-1 text-sm text-muted">Tercero: {billingCustomerLabel || billingDocument}</p>
-                        </div>
-                        <button
-                          type="button"
-                          className="touch-button-secondary !min-h-[2.75rem] !px-5 text-sm"
-                          onClick={() => setShowBillingDetailsScreen(true)}
-                        >
-                          Editar datos
-                        </button>
+                  {electronicBillingEnabled && !isMonthlyPayment && (
+                    // Pantalla 2: a nombre de quien va la factura
+                    <div className="mt-4">
+                      <p className="mb-2 text-lg font-semibold text-ink">¿A nombre de quién va la factura?</p>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        {[
+                          { requested: false, title: 'Consumidor final', detail: '(sin datos)', icon: '👤' },
+                          {
+                            requested: true,
+                            title: 'A mi nombre o empresa',
+                            detail:
+                              electronicBillingRequested && billingCustomer?.exist
+                                ? maskName(customerDisplayName(billingCustomer.data))
+                                : 'Cédula o NIT',
+                            icon: '🏢',
+                          },
+                        ].map((option) => {
+                          const selected = electronicBillingRequested === option.requested;
+                          return (
+                            <button
+                              key={option.title}
+                              type="button"
+                              onClick={() => chooseBillingRecipient(option.requested)}
+                              className={`flex items-center gap-4 rounded-2xl border-2 bg-white/80 px-5 py-4 text-left transition-colors ${
+                                selected ? 'border-brand-500 shadow-md' : 'border-black/10'
+                              }`}
+                            >
+                              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-brand-100 text-2xl">
+                                {option.icon}
+                              </span>
+                              <span>
+                                <span className="block text-lg font-semibold text-ink">{option.title}</span>
+                                <span className="block text-sm text-muted">{option.detail}</span>
+                              </span>
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
                   <div className="mt-4 flex gap-3">
                     <button
                       className="touch-button-primary flex-1"
-                      onClick={openPlateEntry}
+                      onClick={() => {
+                        // Factura a nombre: primero cedula/NIT (3) y confirmacion o registro (4A/4B)
+                        if (
+                          electronicBillingEnabled &&
+                          electronicBillingRequested &&
+                          !isMonthlyPayment &&
+                          !billingCustomer?.exist
+                        ) {
+                          startBillingFlow();
+                          return;
+                        }
+                        openPlateEntry();
+                      }}
                       disabled={
-                        (electronicBillingEnabled && showBillingChoiceScreen) ||
                         (electronicBillingEnabled && showBillingDetailsScreen) ||
                         paymentLoading ||
                         billingLoading ||
-                        (electronicBillingEnabled && electronicBillingRequested && !billingCustomer?.exist) ||
                         !monthlySubscriptionValidated
                       }
                     >
@@ -2427,6 +2678,11 @@ export default function App() {
                 <div className="glass-panel" onPointerDownCapture={handleCollectingInteraction}>
                   <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
                     <div>
+                      {electronicBillingRequested && billingCustomer?.exist && (
+                        <span className="mb-2 block w-fit rounded-full bg-brand-100 px-3 py-1 text-sm font-medium text-brand-700">
+                          Factura a: {maskName(customerDisplayName(billingCustomer.data))}
+                        </span>
+                      )}
                       <span className="mb-1 inline-block text-xs uppercase tracking-[0.22em] text-brand-700">
                         Recepcion de efectivo
                       </span>
@@ -2574,6 +2830,13 @@ export default function App() {
                         </p>
                       </div>
                     </div>
+
+                    {electronicBillingRequested && billingInvoiceEmail && (
+                      <p className="text-center text-base text-ink">
+                        ✉ Su factura electrónica llegará a{' '}
+                        <span className="font-semibold">{maskEmail(billingInvoiceEmail)}</span>
+                      </p>
+                    )}
 
                     {/* Countdown + print */}
                     <div className="flex flex-col items-center gap-3 pt-1">

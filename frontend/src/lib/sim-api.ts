@@ -303,6 +303,19 @@ export function createElectronicBillingCustomer(
   });
 }
 
+export function updateElectronicBillingCustomerEmail(
+  identification: string,
+  email: string,
+): Promise<ElectronicBillingCustomerSearch> {
+  return apiFetch<ElectronicBillingCustomerSearch>(
+    `/electronic-billing/customers/${encodeURIComponent(identification)}/email`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ email }),
+    },
+  );
+}
+
 // --- Auth ---
 
 export function loginAdmin(_email: string, _password: string): Promise<{ accessToken: string }> {

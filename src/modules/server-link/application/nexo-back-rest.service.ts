@@ -87,6 +87,13 @@ export class NexoBackRestService {
     );
   }
 
+  updateElectronicBillingCustomerEmail(identification: string, email: string) {
+    return this.requestJson<unknown>(
+      `/updateCustomerEmailSiigo/${encodeURIComponent(identification)}`,
+      { method: 'PUT', body: { email } },
+    );
+  }
+
   createElectronicBillingCustomer(dto: CreateElectronicBillingCustomerDto) {
     return this.requestJson<unknown>('/createCustomerSiigo', {
       method: 'POST',
@@ -201,7 +208,10 @@ export class NexoBackRestService {
     ]);
 
     const validation = this.asRecord(validationResponse);
-    if (validation.isSuccess === false) {
+    // nexo_back responde un cobro normal con isSuccess:false + "Pago permitido" y el total;
+    // solo es rechazo cuando no hay nada por cobrar (ej. "Pago no permitido", total 0).
+    const payableTotal = this.readNumber(validation.total) ?? 0;
+    if (validation.isSuccess !== true && payableTotal <= 0) {
       throw new Error(
         this.readString(validation.messageBody) ??
           this.readString(validation.messageTitle) ??

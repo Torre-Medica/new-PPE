@@ -149,6 +149,29 @@ export async function createElectronicBillingCustomer(
   return response.json();
 }
 
+// Cambia el correo al que llega la factura de un tercero ya registrado
+export async function updateElectronicBillingCustomerEmail(
+  identification: string,
+  email: string,
+): Promise<ElectronicBillingCustomerSearch> {
+  const response = await fetch(
+    `${API_PREFIX}/electronic-billing/customers/${encodeURIComponent(identification)}/email`,
+    {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email }),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error('No fue posible actualizar el correo');
+  }
+
+  return response.json() as Promise<ElectronicBillingCustomerSearch>;
+}
+
 export async function cancelKioskSession(paymentSessionId: string) {
   const response = await fetch(`${API_PREFIX}/kiosk/payment-sessions/${paymentSessionId}/cancel`, {
     method: 'POST',

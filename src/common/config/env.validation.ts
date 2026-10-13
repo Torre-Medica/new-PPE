@@ -9,6 +9,7 @@ export const envValidationSchema = Joi.object({
   DATABASE_PATH: Joi.string().trim().min(1).required(),
   FACTURACION: Joi.boolean().truthy('true').falsy('false').default(false),
   MENSUALIDADES: Joi.boolean().truthy('true').falsy('false').default(false),
+  FACTURACION_CIUDAD_DEFECTO: Joi.string().default('Medellin'),
   TYPEORM_LOGGING: Joi.boolean().truthy('true').falsy('false').default(false),
   SERVER_LINK_URL: Joi.string().uri().default('http://localhost:3001'),
   SERVER_LINK_NAMESPACE: Joi.string().default('/'),

@@ -84,6 +84,7 @@ export interface KioskStateSummary {
   features?: {
     electronicBillingEnabled?: boolean;
     monthlySubscriptionsEnabled?: boolean;
+    electronicBillingDefaultCity?: string;
   };
   timeouts?: {
     validatingMs?: number;
@@ -137,10 +138,10 @@ export interface ElectronicBillingCustomerPayload {
   firstName: string;
   lastName?: string;
   idIdentificationType: number;
-  address: string;
+  address?: string;
   cityId: number;
   email: string;
-  phoneNumber: string;
+  phoneNumber?: string;
   vatResponsible: boolean;
   idCodeFiscalResponsabilities?: number[];
   contacts?: Array<{ firstName: string; lastName: string }>;
