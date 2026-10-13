@@ -1948,6 +1948,7 @@ export default function App() {
       await ejectDispenserUnit(adminSession.accessToken, {
         slotKey,
         quantity: 1,
+        createdBy: adminSession.email,
       });
       await refreshAdminDashboard(adminSession.accessToken);
     } catch (error) {

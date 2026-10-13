@@ -41,6 +41,31 @@ export class NexoBackRestService {
     });
   }
 
+  /** Historial de cargas/descargas de tolvas; nexo_back lo guarda sin duplicar (por id). */
+  syncDispenserSlotMovements(
+    movements: Array<{
+      id: number;
+      type: string;
+      slotKey: string;
+      slotLabel: string;
+      denominationId: number;
+      quantityBefore: number | null;
+      quantityAfter: number | null;
+      quantityDifference: number;
+      valueDifference: number;
+      createdBy: string;
+      reason: string | null;
+      createdAt: string;
+    }>,
+  ) {
+    const deviceUuid = this.configService.get<string>('serverLink.deviceUuid', '');
+    return this.requestJson<{ saved: number }>('/syncPpeSlotMovements', {
+      method: 'POST',
+      auth: true,
+      body: { deviceUuid, movements },
+    });
+  }
+
   async getElectronicBillingCatalogs() {
     const [identificationTypes, fiscalResponsibilities, cities] =
       await Promise.all([

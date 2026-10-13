@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseFilters,
 } from '@nestjs/common';
 import { DomainExceptionFilter } from '@common/errors/domain-exception.filter';
@@ -15,11 +16,13 @@ import { Roles } from '@common/security/roles.decorator';
 import { CashInventoryService } from '@modules/cash-management/application/cash-inventory.service';
 import { CollectorTestControlDto } from '@modules/local-api/interfaces/http/dto/collector-test-control.dto';
 import { EjectDispenserDto } from '@modules/local-api/interfaces/http/dto/eject-dispenser.dto';
+import { QueryDispenserMovementsDto } from '@modules/local-api/interfaces/http/dto/query-dispenser-movements.dto';
 import { SlotCashAdjustmentDto } from '@modules/local-api/interfaces/http/dto/slot-cash-adjustment.dto';
 import { PaymentSessionService } from '@modules/payment-core/application/payment-session.service';
 import { UpdateDispenserSlotDto } from '@modules/peripherals/application/dto/update-dispenser-slot.dto';
 import { DispenserSlotService } from '@modules/peripherals/application/dispenser-slot.service';
 import { PeripheralsService } from '@modules/peripherals/application/peripherals.service';
+import { DispenserSlotMovementSyncService } from '@modules/local-api/application/dispenser-slot-movement-sync.service';
 
 @UseFilters(DomainExceptionFilter)
 @Controller('dispensers')
@@ -31,12 +34,25 @@ export class DispenserSlotsController {
     private readonly dispenserSlotService: DispenserSlotService,
     private readonly peripheralsService: PeripheralsService,
     private readonly paymentSessionService: PaymentSessionService,
+    private readonly slotMovementSync: DispenserSlotMovementSyncService,
   ) {}
 
   @Roles(LocalApiRole.Admin, LocalApiRole.Operator, LocalApiRole.Audit)
   @Get('slots')
   getAll() {
     return this.dispenserSlotService.getAll();
+  }
+
+  /** Historial de cargas/descargas de las tolvas (para el frontend Nexo). */
+  @Roles(LocalApiRole.Admin, LocalApiRole.Operator, LocalApiRole.Audit)
+  @Get('movements')
+  getMovements(@Query() query: QueryDispenserMovementsDto) {
+    return this.cashInventoryService.getDispenserSlotMovements({
+      from: query.from ? new Date(query.from) : undefined,
+      to: query.to ? new Date(query.to) : undefined,
+      slotKey: query.slotKey,
+      limit: query.limit,
+    });
   }
 
   @Roles(LocalApiRole.Admin, LocalApiRole.Operator)
@@ -69,6 +85,7 @@ export class DispenserSlotsController {
   async update(@Param('key') key: string, @Body() dto: UpdateDispenserSlotDto) {
     const updated = await this.dispenserSlotService.update(key, dto);
     this.paymentSessionService.syncCashInventoryToNexoBack();
+    void this.slotMovementSync.sync();
     return updated;
   }
 
@@ -83,6 +100,7 @@ export class DispenserSlotsController {
     );
 
     this.paymentSessionService.syncCashInventoryToNexoBack();
+    void this.slotMovementSync.sync();
     return updated;
   }
 
@@ -97,6 +115,7 @@ export class DispenserSlotsController {
     );
 
     this.paymentSessionService.syncCashInventoryToNexoBack();
+    void this.slotMovementSync.sync();
     return updated;
   }
 
@@ -118,6 +137,7 @@ export class DispenserSlotsController {
     const result = await this.cashInventoryService.ejectFromDispenserSlot(
       dto.slotKey,
       dto.quantity ?? 1,
+      dto.createdBy,
     );
 
     this.logger.log(
@@ -126,6 +146,7 @@ export class DispenserSlotsController {
     );
 
     this.paymentSessionService.syncCashInventoryToNexoBack();
+    void this.slotMovementSync.sync();
     return result;
   }
 }

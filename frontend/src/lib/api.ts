@@ -327,7 +327,7 @@ export async function printCashCloseoutReceipt(accessToken: string, closeoutId: 
 
 export async function ejectDispenserUnit(
   accessToken: string,
-  payload: { slotKey: 'bill1' | 'bill2' | 'coin1' | 'coin2'; quantity?: number },
+  payload: { slotKey: 'bill1' | 'bill2' | 'coin1' | 'coin2'; quantity?: number; createdBy?: string },
 ) {
   const response = await fetch(`${API_PREFIX}/dispensers/eject`, {
     method: 'POST',

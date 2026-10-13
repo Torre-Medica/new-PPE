@@ -33,6 +33,14 @@ export class CashMovementEntity {
   @Column({ type: 'varchar', length: 16, nullable: true, name: 'slot_key' })
   slotKey!: string | null;
 
+  /** Cantidad de la tolva antes del movimiento (solo cargas/descargas de tolva). */
+  @Column({ type: 'integer', nullable: true, name: 'quantity_before' })
+  quantityBefore!: number | null;
+
+  /** Cantidad de la tolva despues del movimiento (solo cargas/descargas de tolva). */
+  @Column({ type: 'integer', nullable: true, name: 'quantity_after' })
+  quantityAfter!: number | null;
+
   @Column({ type: 'integer', name: 'unit_value' })
   unitValue!: number;
 

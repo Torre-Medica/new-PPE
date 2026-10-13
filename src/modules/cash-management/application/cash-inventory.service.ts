@@ -129,6 +129,7 @@ export class CashInventoryService {
     reasonOverride?: string,
     manager?: EntityManager,
     slotKey?: DispenserSlotKey,
+    slotQuantities?: { before: number; after: number },
   ) {
     const denominationRepo = manager
       ? manager.getRepository(DenominationEntity)
@@ -156,6 +157,8 @@ export class CashInventoryService {
       paymentSessionId: null,
       createdBy: dto.createdBy ?? 'system',
       slotKey: slotKey ?? null,
+      quantityBefore: slotQuantities?.before ?? null,
+      quantityAfter: slotQuantities?.after ?? null,
     });
 
     return movementRepo.save(movement);
@@ -564,6 +567,7 @@ export class CashInventoryService {
     });
 
     await this.dataSource.transaction(async (manager) => {
+      const quantityBefore = await this.readSlotQuantity(slot.slotKey, manager);
       await this.dispenserSlotService.incrementSlotQuantity(
         slot.slotKey,
         input.quantity,
@@ -580,6 +584,7 @@ export class CashInventoryService {
         input.reason ?? `Cargue manual de slot ${slotKey}`,
         manager,
         slot.slotKey,
+        { before: quantityBefore, after: quantityBefore + input.quantity },
       );
     });
 
@@ -602,6 +607,7 @@ export class CashInventoryService {
     }
 
     await this.dataSource.transaction(async (manager) => {
+      const quantityBefore = await this.readSlotQuantity(slot.slotKey, manager);
       await this.dispenserSlotService.decrementSlotQuantity(
         slot.slotKey,
         input.quantity,
@@ -618,6 +624,7 @@ export class CashInventoryService {
         input.reason ?? `Descargue manual de slot ${slotKey}`,
         manager,
         slot.slotKey,
+        { before: quantityBefore, after: quantityBefore - input.quantity },
       );
     });
 
@@ -632,6 +639,7 @@ export class CashInventoryService {
   async ejectFromDispenserSlot(
     slotKey: string,
     quantity: number,
+    createdBy?: string,
   ): Promise<{ slotKey: string; denominationId: number; quantity: number; totalDispensed: number }> {
     const slot = await this.dispenserSlotService.findOne(slotKey);
     if (!slot) {
@@ -673,15 +681,70 @@ export class CashInventoryService {
         denominationId,
         quantity,
         reason: `Expulsion manual desde ${slotKey}`,
-        createdBy: 'admin',
+        createdBy: createdBy ?? 'admin',
       },
       CashMovementType.Unload,
       `Expulsion manual de ${quantity} unidad(es) desde ${slotKey}`,
       undefined,
       slot.slotKey,
+      { before: slot.quantity, after: slot.quantity - quantity },
     );
 
     return { slotKey, denominationId, quantity, totalDispensed };
+  }
+
+  private async readSlotQuantity(slotKey: DispenserSlotKey, manager: EntityManager): Promise<number> {
+    const current = await manager.findOne(DispenserSlotEntity, { where: { slotKey } });
+    return current?.quantity ?? 0;
+  }
+
+  /**
+   * Historial de cargas y descargas de las tolvas de cambio (no incluye la caja
+   * recolectora): mas reciente primero.
+   */
+  async getDispenserSlotMovements(query: {
+    from?: Date;
+    to?: Date;
+    slotKey?: string;
+    limit?: number;
+  }) {
+    const builder = this.cashMovementRepository
+      .createQueryBuilder('movement')
+      .where('movement.slotKey IS NOT NULL')
+      .andWhere('movement.type IN (:...types)', {
+        types: [CashMovementType.Load, CashMovementType.Unload],
+      })
+      .orderBy('movement.createdAt', 'DESC')
+      .addOrderBy('movement.id', 'DESC')
+      .take(Math.min(Math.max(query.limit ?? 200, 1), 1000));
+
+    if (query.from) builder.andWhere('movement.createdAt >= :from', { from: query.from });
+    if (query.to) builder.andWhere('movement.createdAt <= :to', { to: query.to });
+    if (query.slotKey) builder.andWhere('movement.slotKey = :slotKey', { slotKey: query.slotKey });
+
+    const [movements, slots] = await Promise.all([
+      builder.getMany(),
+      this.dispenserSlotService.getAll(),
+    ]);
+    const labelBySlot = new Map(slots.map((slot) => [slot.slotKey, slot.label]));
+
+    return movements.map((movement) => {
+      const sign = movement.type === CashMovementType.Unload ? -1 : 1;
+      return {
+        id: movement.id,
+        type: movement.type,
+        slotKey: movement.slotKey,
+        slotLabel: labelBySlot.get(movement.slotKey as DispenserSlotKey) ?? movement.slotKey,
+        denominationId: movement.denominationId,
+        quantityBefore: movement.quantityBefore,
+        quantityAfter: movement.quantityAfter,
+        quantityDifference: sign * movement.quantity,
+        valueDifference: sign * movement.totalValue,
+        reason: movement.reason,
+        createdBy: movement.createdBy,
+        createdAt: movement.createdAt,
+      };
+    });
   }
 
   private async assertLoadableSlot(
