@@ -13,6 +13,8 @@ import {
 import {
   customerDisplayName,
   customerEmail,
+  customerPhone,
+  maskPhone,
   defaultCityId,
   detectBillingDocument,
   documentError,
@@ -33,7 +35,8 @@ const {
   activateKioskCollection,
   cancelKioskSession,
   createElectronicBillingCustomer,
-  updateElectronicBillingCustomerEmail,
+  updateElectronicBillingCustomer,
+  checkElectronicBillingEmail,
   createCashCloseout,
   ejectDispenserUnit,
   fetchActiveKioskSession,
@@ -250,10 +253,10 @@ export default function App() {
   const [showBillingForm, setShowBillingForm] = useState(false);
   const [billingForm, setBillingForm] = useState<BillingFormState>(() => createEmptyBillingForm());
   // Factura a terceros: 'document' (pantalla 3) -> 'confirm' (4A, ya registrado) o 'form' (4B, nuevo)
-  const [billingStep, setBillingStep] = useState<'document' | 'confirm' | 'form'>('document');
+  const [billingStep, setBillingStep] = useState<'document' | 'confirm' | 'form' | 'edit'>('document');
   const [billingResolvedDocument, setBillingResolvedDocument] = useState<BillingDocument | null>(null);
   const [billingNewCustomer, setBillingNewCustomer] = useState({ name: '', email: '', phone: '' });
-  const [billingFieldErrors, setBillingFieldErrors] = useState<{ document?: string; name?: string; email?: string }>({});
+  const [billingFieldErrors, setBillingFieldErrors] = useState<{ document?: string; name?: string; email?: string; phone?: string }>({});
   const [billingDefaultCity, setBillingDefaultCity] = useState('Medellin');
   // Correo al que llegara la factura (se muestra en la pantalla final)
   const [billingInvoiceEmail, setBillingInvoiceEmail] = useState('');
@@ -1715,13 +1718,25 @@ export default function App() {
     if (!document) return;
     const name = billingNewCustomer.name.trim();
     const email = billingNewCustomer.email.trim();
-    const errors: { name?: string; email?: string } = {};
+    const phone = billingNewCustomer.phone.replace(/\s/g, '');
+    const errors: { name?: string; email?: string; phone?: string } = {};
     const personName = document.kind === 'CC' ? splitPersonName(name) : null;
     if (!name) errors.name = 'Obligatorio';
     else if (document.kind === 'CC' && !personName) errors.name = 'Escriba nombre y apellido';
     if (!isValidEmail(email)) errors.email = 'Correo inválido';
+    // Telefono opcional; si se escribe, 10 digitos
+    if (phone && !/^\d{10}$/.test(phone)) errors.phone = 'Debe tener 10 dígitos';
     setBillingFieldErrors(errors);
-    if (errors.name || errors.email) return;
+    if (errors.name || errors.email || errors.phone) return;
+
+    // Que el correo exista: el dominio debe recibir correos
+    setBillingLoading(true);
+    const emailCheck = await checkElectronicBillingEmail(email);
+    setBillingLoading(false);
+    if (!emailCheck.valid) {
+      setBillingFieldErrors({ email: emailCheck.reason ?? 'Correo no existe' });
+      return;
+    }
 
     const catalogs = billingCatalogs;
     const typeId = catalogs ? identificationTypeId(document.kind, catalogs.identificationTypes) : null;
@@ -1741,7 +1756,7 @@ export default function App() {
       idIdentificationType: typeId,
       cityId,
       email,
-      phoneNumber: billingNewCustomer.phone.trim() || undefined,
+      phoneNumber: phone || undefined,
       vatResponsible: false,
       idCodeFiscalResponsabilities: responsibilities.length > 0 ? responsibilities : undefined,
     };
@@ -1789,37 +1804,71 @@ export default function App() {
     });
   };
 
-  // Pantalla 4A -> "Cambiar correo": se escribe el correo nuevo completo (el actual no se
-  // muestra) y se guarda en el tercero de Siigo, que es a donde llega la factura
-  const changeBillingEmail = () => {
-    const identification = billingResolvedDocument?.identification;
-    if (!identification) return;
+  // Pantalla 4A -> "Editar datos": formulario vacio (los datos actuales solo se ven
+  // enmascarados); se guarda solo lo que el cliente escriba
+  const startBillingEdit = () => {
+    setBillingNewCustomer({ name: '', email: '', phone: '' });
+    setBillingFieldErrors({});
+    setBillingError('');
     setBillingEmailNotice(null);
-    setKeyboardModal({
-      label: 'Correo electrónico',
-      title: 'Escriba su nuevo correo',
-      hint: 'La factura electrónica llegará a este correo.',
-      placeholder: 'Ej. juanperez@gmail.com',
-      fullscreen: true,
-      initialValue: '',
-      type: 'email',
-      acceptLabel: 'Guardar correo',
-      validate: (value) => (isValidEmail(value) ? null : 'Correo inválido'),
-      onAccept: async (value) => {
-        setKeyboardModal(null);
-        const email = value.trim();
-        setBillingEmailSaving(true);
-        try {
-          await updateElectronicBillingCustomerEmail(identification, email);
-          setBillingInvoiceEmail(email);
-          setBillingEmailNotice({ ok: true, text: 'Correo actualizado' });
-        } catch {
-          setBillingEmailNotice({ ok: false, text: 'No fue posible cambiar el correo. Intente de nuevo.' });
-        } finally {
-          setBillingEmailSaving(false);
+    setBillingStep('edit');
+  };
+
+  const saveBillingEdit = async () => {
+    const document = billingResolvedDocument;
+    if (!document || !billingCustomer?.exist) return;
+    const name = billingNewCustomer.name.trim();
+    const email = billingNewCustomer.email.trim();
+    const phone = billingNewCustomer.phone.replace(/\s/g, '');
+    if (!name && !email && !phone) {
+      setBillingError('Escriba al menos un dato para cambiar');
+      return;
+    }
+
+    const errors: { name?: string; email?: string; phone?: string } = {};
+    const personName = name && document.kind === 'CC' ? splitPersonName(name) : null;
+    if (name && document.kind === 'CC' && !personName) errors.name = 'Escriba nombre y apellido';
+    if (email && !isValidEmail(email)) errors.email = 'Correo inválido';
+    if (phone && !/^\d{10}$/.test(phone)) errors.phone = 'Debe tener 10 dígitos';
+    setBillingFieldErrors(errors);
+    setBillingError('');
+    if (errors.name || errors.email || errors.phone) return;
+
+    setBillingLoading(true);
+    try {
+      // Que el correo exista: el dominio debe recibir correos
+      if (email) {
+        const emailCheck = await checkElectronicBillingEmail(email);
+        if (!emailCheck.valid) {
+          setBillingFieldErrors({ email: emailCheck.reason ?? 'Correo no existe' });
+          return;
         }
-      },
-    });
+      }
+      const updated = await updateElectronicBillingCustomer(document.identification, {
+        firstName: name ? (personName ? personName.firstName : name) : undefined,
+        lastName: personName ? personName.lastName : undefined,
+        email: email || undefined,
+        phoneNumber: phone || undefined,
+      });
+      // Datos nuevos del tercero (los que devuelve Siigo, o los escritos)
+      const data =
+        updated?.data && typeof updated.data === 'object'
+          ? (updated.data as Record<string, unknown>)
+          : {
+              ...billingCustomer.data,
+              ...(name ? { name: personName ? [personName.firstName, personName.lastName] : [name] } : {}),
+              ...(phone ? { phone } : {}),
+            };
+      setBillingCustomer({ exist: true, data });
+      if (email) setBillingInvoiceEmail(email);
+      setBillingNewCustomer({ name: '', email: '', phone: '' });
+      setBillingEmailNotice({ ok: true, text: 'Datos actualizados' });
+      setBillingStep('confirm');
+    } catch (error) {
+      setBillingError(error instanceof Error ? error.message : 'No fue posible actualizar sus datos');
+    } finally {
+      setBillingLoading(false);
+    }
   };
 
   // Al pulsar "Pagar" se pide la placa (visitantes); debe tener el formato del tipo de
@@ -2458,7 +2507,7 @@ export default function App() {
                 countdownLabel={reviewCountdownSeconds > 0 ? `Cancelacion en: ${formatReviewCountdown(reviewCountdownSeconds)}` : 'Cancelando...'}
                 emailSaving={billingEmailSaving}
                 emailNotice={billingEmailNotice}
-                onChangeEmail={changeBillingEmail}
+                onEditData={startBillingEdit}
                 onNotMe={() => {
                   setBillingCustomer(null);
                   setBillingInvoiceEmail('');
@@ -2466,6 +2515,35 @@ export default function App() {
                   setBillingStep('document');
                 }}
                 onConfirm={finishBillingFlow}
+              />
+            ) : billingStep === 'edit' && billingCustomer?.exist && billingResolvedDocument ? (
+              <BillingNewCustomerScreen
+                mode="edit"
+                currentValues={{
+                  name: maskName(customerDisplayName(billingCustomer.data)),
+                  email: billingInvoiceEmail ? maskEmail(billingInvoiceEmail) : '',
+                  phone: maskPhone(customerPhone(billingCustomer.data)),
+                }}
+                documentLabel={maskDocument(billingResolvedDocument)}
+                name={billingNewCustomer.name}
+                email={billingNewCustomer.email}
+                phone={billingNewCustomer.phone}
+                nameError={billingFieldErrors.name ?? null}
+                emailError={billingFieldErrors.email ?? null}
+                phoneError={billingFieldErrors.phone ?? null}
+                generalError={billingError || null}
+                loading={billingLoading}
+                countdownLabel={reviewCountdownSeconds > 0 ? `Cancelacion en: ${formatReviewCountdown(reviewCountdownSeconds)}` : 'Cancelando...'}
+                onEditName={() => editBillingField('name')}
+                onEditEmail={() => editBillingField('email')}
+                onEditPhone={() => editBillingField('phone')}
+                onBack={() => {
+                  setBillingFieldErrors({});
+                  setBillingError('');
+                  setBillingNewCustomer({ name: '', email: '', phone: '' });
+                  setBillingStep('confirm');
+                }}
+                onSave={() => void saveBillingEdit()}
               />
             ) : billingStep === 'form' && billingResolvedDocument ? (
               <BillingNewCustomerScreen
@@ -2475,6 +2553,7 @@ export default function App() {
                 phone={billingNewCustomer.phone}
                 nameError={billingFieldErrors.name ?? null}
                 emailError={billingFieldErrors.email ?? null}
+                phoneError={billingFieldErrors.phone ?? null}
                 generalError={billingError || null}
                 loading={billingLoading}
                 countdownLabel={reviewCountdownSeconds > 0 ? `Cancelacion en: ${formatReviewCountdown(reviewCountdownSeconds)}` : 'Cancelando...'}

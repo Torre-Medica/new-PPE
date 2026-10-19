@@ -216,7 +216,7 @@ export function BillingConfirmScreen({
   countdownLabel,
   emailSaving,
   emailNotice,
-  onChangeEmail,
+  onEditData,
   onNotMe,
   onConfirm,
 }: {
@@ -227,7 +227,7 @@ export function BillingConfirmScreen({
   countdownLabel: string;
   emailSaving: boolean;
   emailNotice: { ok: boolean; text: string } | null;
-  onChangeEmail: () => void;
+  onEditData: () => void;
   onNotMe: () => void;
   onConfirm: () => void;
 }) {
@@ -247,7 +247,7 @@ export function BillingConfirmScreen({
       <div className="mt-8 w-full max-w-2xl rounded-3xl bg-white/80 px-6 py-6 shadow-sm">
         <p className="text-3xl font-bold tracking-wide text-ink">{maskedName || '—'}</p>
         <p className="mt-2 text-xl text-muted tabular-nums">{maskedDocument}</p>
-        {/* Correo de la factura + opcion de cambiarlo (si el cliente cambio de correo) */}
+        {/* Correo de la factura + opcion de editar nombre, correo y telefono */}
         <div className="mt-5 flex items-center justify-between gap-3 rounded-2xl bg-slate-50 py-3 pl-4 pr-3 text-left">
           <p className="min-w-0 truncate whitespace-nowrap text-lg text-ink">
             <span className="mr-2 font-bold text-brand-500">@</span>
@@ -261,11 +261,11 @@ export function BillingConfirmScreen({
           </p>
           <button
             type="button"
-            onClick={onChangeEmail}
+            onClick={onEditData}
             disabled={emailSaving}
             className="shrink-0 rounded-xl border-2 border-brand-300 bg-white px-4 py-2 text-base font-semibold text-brand-700 active:scale-95 disabled:opacity-60"
           >
-            {emailSaving ? 'Guardando…' : maskedEmail ? '✎ Cambiar correo' : '✎ Agregar correo'}
+            {emailSaving ? 'Guardando…' : '✎ Editar datos'}
           </button>
         </div>
       </div>
@@ -298,6 +298,7 @@ export function BillingNewCustomerScreen({
   phone,
   nameError,
   emailError,
+  phoneError,
   generalError,
   loading,
   countdownLabel,
@@ -306,13 +307,20 @@ export function BillingNewCustomerScreen({
   onEditPhone,
   onBack,
   onSave,
+  mode = 'create',
+  currentValues,
 }: {
+  // edit: tercero ya registrado; los campos vacios conservan el dato actual
+  mode?: 'create' | 'edit';
+  // Datos actuales enmascarados (guia en cada campo, modo edicion)
+  currentValues?: { name: string; email: string; phone: string };
   documentLabel: string;
   name: string;
   email: string;
   phone: string;
   nameError: string | null;
   emailError: string | null;
+  phoneError: string | null;
   generalError: string | null;
   loading: boolean;
   countdownLabel: string;
@@ -322,6 +330,12 @@ export function BillingNewCustomerScreen({
   onBack: () => void;
   onSave: () => void;
 }) {
+  const editing = mode === 'edit';
+  const guide = (current?: string) => (editing && current ? `Actual: ${current}` : 'Toque para escribir');
+  const tips = editing
+    ? ['Escriba solo lo que quiera cambiar', 'Lo que deje vacío se conserva', 'La factura llegará al correo registrado']
+    : ['La factura electrónica llegará a este correo', 'Persona: escriba nombre y apellido', 'Ciudad y datos fiscales se llenan solos'];
+
   return (
     // Pantalla completa clara, igual que la del documento
     <div className="fixed inset-0 z-40 flex flex-col bg-[#f3f6fb] px-10 pb-8 pt-6">
@@ -337,7 +351,7 @@ export function BillingNewCustomerScreen({
           <section className="flex flex-col gap-5">
             <div className="mb-1">
               <h1 className="text-5xl font-extrabold tracking-tight text-[#0b2a5b]">
-                Registre sus datos para la factura
+                {editing ? 'Actualice sus datos' : 'Registre sus datos para la factura'}
               </h1>
               <span className="mt-3 inline-flex items-center gap-2 rounded-full bg-white px-4 py-1.5 text-lg font-semibold text-ink shadow-sm tabular-nums">
                 <span className="text-brand-500">🪪</span>
@@ -349,7 +363,8 @@ export function BillingNewCustomerScreen({
               label="Nombre o razón social"
               icon="👤"
               value={name}
-              placeholder="Toque para escribir"
+              placeholder={guide(currentValues?.name)}
+              optional={editing}
               error={nameError}
               onTap={onEditName}
             />
@@ -357,7 +372,8 @@ export function BillingNewCustomerScreen({
               label="Correo electrónico"
               icon="@"
               value={email}
-              placeholder="Toque para escribir"
+              placeholder={guide(currentValues?.email)}
+              optional={editing}
               error={emailError}
               onTap={onEditEmail}
             />
@@ -365,26 +381,21 @@ export function BillingNewCustomerScreen({
               label="Teléfono"
               icon="📱"
               value={phone}
-              placeholder="Toque para escribir"
+              placeholder={guide(currentValues?.phone)}
               optional
+              error={phoneError}
               onTap={onEditPhone}
             />
           </section>
 
           <div className="flex flex-col gap-5 lg:pt-28">
             <div className="rounded-2xl bg-white p-5 shadow-sm">
-              <p className="flex items-start gap-3 text-lg text-ink">
-                <span className="mt-0.5 text-brand-500">✓</span>
-                <span>La factura electrónica llegará a este correo</span>
-              </p>
-              <p className="mt-4 flex items-start gap-3 text-lg text-ink">
-                <span className="mt-0.5 text-brand-500">✓</span>
-                <span>Persona: escriba nombre y apellido</span>
-              </p>
-              <p className="mt-4 flex items-start gap-3 text-lg text-ink">
-                <span className="mt-0.5 text-brand-500">✓</span>
-                <span>Ciudad y datos fiscales se llenan solos</span>
-              </p>
+              {tips.map((tip, index) => (
+                <p key={tip} className={`flex items-start gap-3 text-lg text-ink ${index > 0 ? 'mt-4' : ''}`}>
+                  <span className="mt-0.5 text-brand-500">✓</span>
+                  <span>{tip}</span>
+                </p>
+              ))}
             </div>
           </div>
         </div>
@@ -397,7 +408,7 @@ export function BillingNewCustomerScreen({
             Volver
           </button>
           <button type="button" className="touch-button-primary" onClick={onSave} disabled={loading}>
-            {loading ? 'Guardando…' : 'Guardar y continuar'}
+            {loading ? 'Verificando…' : editing ? 'Guardar cambios' : 'Guardar y continuar'}
           </button>
         </div>
       </div>

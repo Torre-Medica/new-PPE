@@ -146,3 +146,30 @@ export function defaultCityId(
   const wanted = normalize(cityName);
   return cities.find((city) => normalize(city.cityName) === wanted)?.id ?? null;
 }
+
+// Telefono del tercero en la respuesta de busqueda, si viene
+export function customerPhone(data: Record<string, unknown>): string {
+  const direct = asText(data.phone) || asText(data.number_phone) || asText(data.phoneNumber);
+  if (direct) return direct;
+  const contacts = data.contacts;
+  if (Array.isArray(contacts)) {
+    for (const contact of contacts) {
+      if (contact && typeof contact === 'object') {
+        const phone = (contact as Record<string, unknown>).phone;
+        if (typeof phone === 'string' && phone.trim()) return phone.trim();
+        if (phone && typeof phone === 'object') {
+          const number = asText((phone as Record<string, unknown>).number);
+          if (number) return number;
+        }
+      }
+    }
+  }
+  return '';
+}
+
+// "3001234567" -> "*******567"
+export function maskPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length < 4) return '';
+  return `${'*'.repeat(digits.length - 3)}${digits.slice(-3)}`;
+}

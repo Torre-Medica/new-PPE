@@ -94,6 +94,16 @@ export class NexoBackRestService {
     );
   }
 
+  updateElectronicBillingCustomer(
+    identification: string,
+    data: { firstName?: string; lastName?: string; email?: string; phoneNumber?: string },
+  ) {
+    return this.requestJson<unknown>(
+      `/updateCustomerSiigo/${encodeURIComponent(identification)}`,
+      { method: 'PUT', body: data },
+    );
+  }
+
   createElectronicBillingCustomer(dto: CreateElectronicBillingCustomerDto) {
     return this.requestJson<unknown>('/createCustomerSiigo', {
       method: 'POST',

@@ -316,6 +316,27 @@ export function updateElectronicBillingCustomerEmail(
   );
 }
 
+export function checkElectronicBillingEmail(
+  email: string,
+): Promise<{ valid: boolean; reason?: string }> {
+  return apiFetch<{ valid: boolean; reason?: string }>(
+    `/electronic-billing/email-check?email=${encodeURIComponent(email)}`,
+  ).catch(() => ({ valid: true }));
+}
+
+export function updateElectronicBillingCustomer(
+  identification: string,
+  data: { firstName?: string; lastName?: string; email?: string; phoneNumber?: string },
+): Promise<ElectronicBillingCustomerSearch> {
+  return apiFetch<ElectronicBillingCustomerSearch>(
+    `/electronic-billing/customers/${encodeURIComponent(identification)}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    },
+  );
+}
+
 // --- Auth ---
 
 export function loginAdmin(_email: string, _password: string): Promise<{ accessToken: string }> {

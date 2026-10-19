@@ -142,11 +142,69 @@ export async function createElectronicBillingCustomer(
   });
 
   if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(text || 'No fue posible registrar el tercero');
+    throw new Error(await errorMessage(response, 'No fue posible registrar el tercero'));
   }
 
   return response.json();
+}
+
+// Mensaje legible de un error del backend ({ message } de Nest) o el texto por defecto
+async function errorMessage(response: Response, fallback: string): Promise<string> {
+  const text = await response.text().catch(() => '');
+  try {
+    const body = JSON.parse(text) as { message?: unknown };
+    if (typeof body.message === 'string' && body.message) return body.message;
+    if (Array.isArray(body.message) && body.message.length) return String(body.message[0]);
+  } catch {
+    // no es JSON
+  }
+  return text || fallback;
+}
+
+// Verifica que el dominio del correo exista y reciba correo
+export async function checkElectronicBillingEmail(
+  email: string,
+): Promise<{ valid: boolean; reason?: string }> {
+  try {
+    const response = await fetch(
+      `${API_PREFIX}/electronic-billing/email-check?email=${encodeURIComponent(email)}`,
+    );
+    if (!response.ok) return { valid: true };
+    return (await response.json()) as { valid: boolean; reason?: string };
+  } catch {
+    // Sin respuesta no se bloquea al cliente; el backend vuelve a validar al guardar
+    return { valid: true };
+  }
+}
+
+export type ElectronicBillingCustomerUpdate = {
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  phoneNumber?: string;
+};
+
+// Cambia nombre, correo y/o telefono de un tercero ya registrado (solo lo que viene)
+export async function updateElectronicBillingCustomer(
+  identification: string,
+  data: ElectronicBillingCustomerUpdate,
+): Promise<ElectronicBillingCustomerSearch> {
+  const response = await fetch(
+    `${API_PREFIX}/electronic-billing/customers/${encodeURIComponent(identification)}`,
+    {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, 'No fue posible actualizar sus datos'));
+  }
+
+  return response.json() as Promise<ElectronicBillingCustomerSearch>;
 }
 
 // Cambia el correo al que llega la factura de un tercero ya registrado
@@ -166,7 +224,7 @@ export async function updateElectronicBillingCustomerEmail(
   );
 
   if (!response.ok) {
-    throw new Error('No fue posible actualizar el correo');
+    throw new Error(await errorMessage(response, 'No fue posible actualizar el correo'));
   }
 
   return response.json() as Promise<ElectronicBillingCustomerSearch>;

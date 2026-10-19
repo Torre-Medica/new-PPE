@@ -91,3 +91,26 @@ export class UpdateElectronicBillingCustomerEmailDto {
   @MaxLength(160)
   email!: string;
 }
+
+// Cambio de datos de contacto de un tercero ya registrado: solo los campos que cambian
+export class UpdateElectronicBillingCustomerDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  firstName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  lastName?: string;
+
+  @IsOptional()
+  @IsEmail()
+  @MaxLength(160)
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  phoneNumber?: string;
+}
