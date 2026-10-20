@@ -53,6 +53,14 @@ export class BillingContactValidationService {
     }
   }
 
+  /** Direccion de facturacion: obligatoria al registrar (minimo 5 caracteres). */
+  checkAddress(address?: string | null): ContactCheck {
+    const value = (address ?? '').trim();
+    if (!value) return { valid: false, reason: 'La dirección es obligatoria' };
+    if (value.length < 5) return { valid: false, reason: 'La dirección es muy corta' };
+    return { valid: true };
+  }
+
   /** Opcional; si viene, 10 digitos (celular o fijo colombiano). */
   checkPhone(phone?: string | null): ContactCheck {
     const value = (phone ?? '').trim();

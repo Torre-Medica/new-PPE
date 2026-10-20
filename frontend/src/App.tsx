@@ -15,6 +15,8 @@ import {
   customerEmail,
   customerPhone,
   maskPhone,
+  customerAddress,
+  maskAddress,
   defaultCityId,
   detectBillingDocument,
   documentError,
@@ -255,11 +257,13 @@ export default function App() {
   // Factura a terceros: 'document' (pantalla 3) -> 'confirm' (4A, ya registrado) o 'form' (4B, nuevo)
   const [billingStep, setBillingStep] = useState<'document' | 'confirm' | 'form' | 'edit'>('document');
   const [billingResolvedDocument, setBillingResolvedDocument] = useState<BillingDocument | null>(null);
-  const [billingNewCustomer, setBillingNewCustomer] = useState({ name: '', email: '', phone: '' });
-  const [billingFieldErrors, setBillingFieldErrors] = useState<{ document?: string; name?: string; email?: string; phone?: string }>({});
+  const [billingNewCustomer, setBillingNewCustomer] = useState({ name: '', email: '', phone: '', address: '' });
+  const [billingFieldErrors, setBillingFieldErrors] = useState<{ document?: string; name?: string; email?: string; phone?: string; address?: string }>({});
   const [billingDefaultCity, setBillingDefaultCity] = useState('Medellin');
   // Correo al que llegara la factura (se muestra en la pantalla final)
   const [billingInvoiceEmail, setBillingInvoiceEmail] = useState('');
+  // Edicion del tercero desde la pantalla de efectivo (lapiz junto a "Factura a")
+  const [billingCashEditOpen, setBillingCashEditOpen] = useState(false);
   // Cambio de correo en la pantalla 4A
   const [billingEmailSaving, setBillingEmailSaving] = useState(false);
   const [billingEmailNotice, setBillingEmailNotice] = useState<{ ok: boolean; text: string } | null>(null);
@@ -327,10 +331,11 @@ export default function App() {
     setBillingForm(createEmptyBillingForm());
     setBillingStep('document');
     setBillingResolvedDocument(null);
-    setBillingNewCustomer({ name: '', email: '', phone: '' });
+    setBillingNewCustomer({ name: '', email: '', phone: '', address: '' });
     setBillingFieldErrors({});
     setBillingInvoiceEmail('');
     setBillingEmailNotice(null);
+    setBillingCashEditOpen(false);
   };
   const resetMonthlyFlow = () => {
     setMonthlyPlate('');
@@ -1702,7 +1707,7 @@ export default function App() {
           !isGenericSuggestedCustomerName(customer.data.razonSocial)
             ? customer.data.razonSocial.toUpperCase()
             : '';
-        setBillingNewCustomer({ name: suggested, email: '', phone: '' });
+        setBillingNewCustomer({ name: suggested, email: '', phone: '', address: '' });
         setBillingStep('form');
       }
     } catch {
@@ -1719,15 +1724,19 @@ export default function App() {
     const name = billingNewCustomer.name.trim();
     const email = billingNewCustomer.email.trim();
     const phone = billingNewCustomer.phone.replace(/\s/g, '');
-    const errors: { name?: string; email?: string; phone?: string } = {};
+    const address = billingNewCustomer.address.trim();
+    const errors: { name?: string; email?: string; phone?: string; address?: string } = {};
     const personName = document.kind === 'CC' ? splitPersonName(name) : null;
     if (!name) errors.name = 'Obligatorio';
+    if (!address) errors.address = 'Obligatoria';
+    else if (address.length < 5) errors.address = 'Muy corta';
     else if (document.kind === 'CC' && !personName) errors.name = 'Escriba nombre y apellido';
     if (!isValidEmail(email)) errors.email = 'Correo inválido';
-    // Telefono opcional; si se escribe, 10 digitos
-    if (phone && !/^\d{10}$/.test(phone)) errors.phone = 'Debe tener 10 dígitos';
+    // Al registrar, el telefono es obligatorio y de 10 digitos
+    if (!phone) errors.phone = 'Obligatorio';
+    else if (!/^\d{10}$/.test(phone)) errors.phone = 'Debe tener 10 dígitos';
     setBillingFieldErrors(errors);
-    if (errors.name || errors.email || errors.phone) return;
+    if (errors.name || errors.email || errors.phone || errors.address) return;
 
     // Que el correo exista: el dominio debe recibir correos
     setBillingLoading(true);
@@ -1756,7 +1765,8 @@ export default function App() {
       idIdentificationType: typeId,
       cityId,
       email,
-      phoneNumber: phone || undefined,
+      address,
+      phoneNumber: phone,
       vatResponsible: false,
       idCodeFiscalResponsabilities: responsibilities.length > 0 ? responsibilities : undefined,
     };
@@ -1783,19 +1793,29 @@ export default function App() {
   };
 
   // Campos de la pantalla 4B: el teclado actualiza el campo en vivo
-  const editBillingField = (field: 'name' | 'email' | 'phone') => {
-    const labels = { name: 'Nombre o razón social', email: 'Correo electrónico', phone: 'Teléfono (opcional)' };
+  const editBillingField = (field: 'name' | 'email' | 'phone' | 'address') => {
+    const labels = {
+      name: 'Nombre o razón social',
+      email: 'Correo electrónico',
+      phone: 'Teléfono',
+      address: 'Dirección',
+    };
     // Telefono con el teclado completo (tiene el teclado numerico a la derecha)
-    const types: Record<typeof field, KbType> = { name: 'text', email: 'email', phone: 'text' };
+    const types: Record<typeof field, KbType> = { name: 'text', email: 'email', phone: 'text', address: 'text' };
     const update = (value: string) => {
-      setBillingNewCustomer((current) => ({ ...current, [field]: field === 'name' ? value.toUpperCase() : value.trim() }));
+      // Nombre y direccion en mayusculas (asi quedan en la factura); la direccion
+      // conserva sus espacios
+      setBillingNewCustomer((current) => ({
+        ...current,
+        [field]: field === 'name' || field === 'address' ? value.toUpperCase() : value.trim(),
+      }));
       setBillingFieldErrors((current) => ({ ...current, [field]: undefined }));
     };
     setKeyboardModal({
       label: labels[field],
       initialValue: billingNewCustomer[field],
       type: types[field],
-      uppercase: field === 'name',
+      uppercase: field === 'name' || field === 'address',
       onChange: update,
       onAccept: (value) => {
         update(value);
@@ -1807,11 +1827,20 @@ export default function App() {
   // Pantalla 4A -> "Editar datos": formulario vacio (los datos actuales solo se ven
   // enmascarados); se guarda solo lo que el cliente escriba
   const startBillingEdit = () => {
-    setBillingNewCustomer({ name: '', email: '', phone: '' });
+    setBillingNewCustomer({ name: '', email: '', phone: '', address: '' });
     setBillingFieldErrors({});
     setBillingError('');
     setBillingEmailNotice(null);
     setBillingStep('edit');
+  };
+
+  // Desde la pantalla de efectivo: misma pantalla de edicion, encima, sin salir del pago
+  const openCashBillingEdit = () => {
+    setBillingNewCustomer({ name: '', email: '', phone: '', address: '' });
+    setBillingFieldErrors({});
+    setBillingError('');
+    setBillingEmailNotice(null);
+    setBillingCashEditOpen(true);
   };
 
   const saveBillingEdit = async () => {
@@ -1820,19 +1849,28 @@ export default function App() {
     const name = billingNewCustomer.name.trim();
     const email = billingNewCustomer.email.trim();
     const phone = billingNewCustomer.phone.replace(/\s/g, '');
-    if (!name && !email && !phone) {
-      setBillingError('Escriba al menos un dato para cambiar');
+    const address = billingNewCustomer.address.trim();
+    if (!name && !email && !phone && !address) {
+      if (!customerAddress(billingCustomer.data)) {
+        setBillingFieldErrors({ address: 'Obligatoria' });
+        setBillingError('');
+      } else {
+        setBillingError('Escriba al menos un dato para cambiar');
+      }
       return;
     }
 
-    const errors: { name?: string; email?: string; phone?: string } = {};
+    const errors: { name?: string; email?: string; phone?: string; address?: string } = {};
     const personName = name && document.kind === 'CC' ? splitPersonName(name) : null;
+    if (address && address.length < 5) errors.address = 'Muy corta';
+    // La direccion es obligatoria: si el tercero no tiene una registrada, hay que escribirla
+    if (!address && !customerAddress(billingCustomer.data)) errors.address = 'Obligatoria';
     if (name && document.kind === 'CC' && !personName) errors.name = 'Escriba nombre y apellido';
     if (email && !isValidEmail(email)) errors.email = 'Correo inválido';
     if (phone && !/^\d{10}$/.test(phone)) errors.phone = 'Debe tener 10 dígitos';
     setBillingFieldErrors(errors);
     setBillingError('');
-    if (errors.name || errors.email || errors.phone) return;
+    if (errors.name || errors.email || errors.phone || errors.address) return;
 
     setBillingLoading(true);
     try {
@@ -1849,6 +1887,7 @@ export default function App() {
         lastName: personName ? personName.lastName : undefined,
         email: email || undefined,
         phoneNumber: phone || undefined,
+        address: address || undefined,
       });
       // Datos nuevos del tercero (los que devuelve Siigo, o los escritos)
       const data =
@@ -1858,12 +1897,15 @@ export default function App() {
               ...billingCustomer.data,
               ...(name ? { name: personName ? [personName.firstName, personName.lastName] : [name] } : {}),
               ...(phone ? { phone } : {}),
+              ...(address ? { address: { address } } : {}),
             };
       setBillingCustomer({ exist: true, data });
       if (email) setBillingInvoiceEmail(email);
-      setBillingNewCustomer({ name: '', email: '', phone: '' });
+      setBillingNewCustomer({ name: '', email: '', phone: '', address: '' });
       setBillingEmailNotice({ ok: true, text: 'Datos actualizados' });
-      setBillingStep('confirm');
+      // Vuelve a donde estaba: la pantalla de efectivo o la confirmacion
+      if (billingCashEditOpen) setBillingCashEditOpen(false);
+      else setBillingStep('confirm');
     } catch (error) {
       setBillingError(error instanceof Error ? error.message : 'No fue posible actualizar sus datos');
     } finally {
@@ -2031,6 +2073,19 @@ export default function App() {
     setCollectingInteractionVersion((current) => current + 1);
     void touchKioskSession(paymentDetails.paymentSessionId).catch(() => undefined);
   }, [paymentDetails.paymentSessionId, paymentStage]);
+
+  // Editando el tercero en plena recepcion de efectivo: cada toque (tambien en el
+  // teclado) reinicia la cuenta regresiva del pago
+  useEffect(() => {
+    if (!billingCashEditOpen) return;
+    const onPointerDown = () => handleCollectingInteraction();
+    window.addEventListener('pointerdown', onPointerDown, { capture: true });
+    return () => window.removeEventListener('pointerdown', onPointerDown, { capture: true });
+  }, [billingCashEditOpen, handleCollectingInteraction]);
+
+  useEffect(() => {
+    if (paymentStage !== 'collecting') setBillingCashEditOpen(false);
+  }, [paymentStage]);
 
   const goToPayment = async () => {
     await setKioskMode('PAYMENT', 'frontend-selector');
@@ -2523,11 +2578,14 @@ export default function App() {
                   name: maskName(customerDisplayName(billingCustomer.data)),
                   email: billingInvoiceEmail ? maskEmail(billingInvoiceEmail) : '',
                   phone: maskPhone(customerPhone(billingCustomer.data)),
+                  address: maskAddress(customerAddress(billingCustomer.data)),
                 }}
                 documentLabel={maskDocument(billingResolvedDocument)}
                 name={billingNewCustomer.name}
                 email={billingNewCustomer.email}
                 phone={billingNewCustomer.phone}
+                address={billingNewCustomer.address}
+                addressError={billingFieldErrors.address ?? null}
                 nameError={billingFieldErrors.name ?? null}
                 emailError={billingFieldErrors.email ?? null}
                 phoneError={billingFieldErrors.phone ?? null}
@@ -2537,10 +2595,11 @@ export default function App() {
                 onEditName={() => editBillingField('name')}
                 onEditEmail={() => editBillingField('email')}
                 onEditPhone={() => editBillingField('phone')}
+                onEditAddress={() => editBillingField('address')}
                 onBack={() => {
                   setBillingFieldErrors({});
                   setBillingError('');
-                  setBillingNewCustomer({ name: '', email: '', phone: '' });
+                  setBillingNewCustomer({ name: '', email: '', phone: '', address: '' });
                   setBillingStep('confirm');
                 }}
                 onSave={() => void saveBillingEdit()}
@@ -2551,6 +2610,8 @@ export default function App() {
                 name={billingNewCustomer.name}
                 email={billingNewCustomer.email}
                 phone={billingNewCustomer.phone}
+                address={billingNewCustomer.address}
+                addressError={billingFieldErrors.address ?? null}
                 nameError={billingFieldErrors.name ?? null}
                 emailError={billingFieldErrors.email ?? null}
                 phoneError={billingFieldErrors.phone ?? null}
@@ -2560,6 +2621,7 @@ export default function App() {
                 onEditName={() => editBillingField('name')}
                 onEditEmail={() => editBillingField('email')}
                 onEditPhone={() => editBillingField('phone')}
+                onEditAddress={() => editBillingField('address')}
                 onBack={() => {
                   setBillingFieldErrors({});
                   setBillingError('');
@@ -2753,14 +2815,65 @@ export default function App() {
                 </div>
               )}
 
+              {paymentStage === 'collecting' && billingCashEditOpen && billingCustomer?.exist && billingResolvedDocument && (
+                <BillingNewCustomerScreen
+                  mode="edit"
+                  currentValues={{
+                    name: maskName(customerDisplayName(billingCustomer.data)),
+                    email: billingInvoiceEmail ? maskEmail(billingInvoiceEmail) : '',
+                    phone: maskPhone(customerPhone(billingCustomer.data)),
+                    address: maskAddress(customerAddress(billingCustomer.data)),
+                  }}
+                  documentLabel={maskDocument(billingResolvedDocument)}
+                  name={billingNewCustomer.name}
+                  email={billingNewCustomer.email}
+                  phone={billingNewCustomer.phone}
+                  address={billingNewCustomer.address}
+                  addressError={billingFieldErrors.address ?? null}
+                  nameError={billingFieldErrors.name ?? null}
+                  emailError={billingFieldErrors.email ?? null}
+                  phoneError={billingFieldErrors.phone ?? null}
+                  generalError={billingError || null}
+                  loading={billingLoading}
+                  countdownLabel={collectingCountdownSeconds > 0 ? `Cancelacion en: ${collectingCountdownSeconds} s` : 'Cancelando...'}
+                  onEditName={() => editBillingField('name')}
+                  onEditEmail={() => editBillingField('email')}
+                  onEditPhone={() => editBillingField('phone')}
+                  onEditAddress={() => editBillingField('address')}
+                  onBack={() => {
+                    setBillingFieldErrors({});
+                    setBillingError('');
+                    setBillingNewCustomer({ name: '', email: '', phone: '', address: '' });
+                    setBillingCashEditOpen(false);
+                  }}
+                  onSave={() => void saveBillingEdit()}
+                />
+              )}
+
               {paymentStage === 'collecting' && (
                 <div className="glass-panel" onPointerDownCapture={handleCollectingInteraction}>
                   <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
                     <div>
                       {electronicBillingRequested && billingCustomer?.exist && (
-                        <span className="mb-2 block w-fit rounded-full bg-brand-100 px-3 py-1 text-sm font-medium text-brand-700">
-                          Factura a: {maskName(customerDisplayName(billingCustomer.data))}
-                        </span>
+                        <div className="mb-2 flex flex-wrap items-center gap-2">
+                          <span className="w-fit rounded-full bg-brand-100 px-3 py-1 text-sm font-medium text-brand-700">
+                            Factura a: {maskName(customerDisplayName(billingCustomer.data))}
+                          </span>
+                          {/* Lapiz: corregir el tercero sin salir del pago */}
+                          {billingResolvedDocument && (
+                            <button
+                              type="button"
+                              onClick={openCashBillingEdit}
+                              aria-label="Editar datos de la factura"
+                              className="flex h-9 w-9 items-center justify-center rounded-full border-2 border-brand-300 bg-white text-lg text-brand-700 shadow-sm active:scale-95"
+                            >
+                              ✎
+                            </button>
+                          )}
+                          {billingEmailNotice?.ok && (
+                            <span className="text-sm font-semibold text-brand-600">✓ {billingEmailNotice.text}</span>
+                          )}
+                        </div>
                       )}
                       <span className="mb-1 inline-block text-xs uppercase tracking-[0.22em] text-brand-700">
                         Recepcion de efectivo

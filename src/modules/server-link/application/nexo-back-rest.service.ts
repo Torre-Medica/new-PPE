@@ -96,7 +96,7 @@ export class NexoBackRestService {
 
   updateElectronicBillingCustomer(
     identification: string,
-    data: { firstName?: string; lastName?: string; email?: string; phoneNumber?: string },
+    data: { firstName?: string; lastName?: string; email?: string; phoneNumber?: string; address?: string },
   ) {
     return this.requestJson<unknown>(
       `/updateCustomerSiigo/${encodeURIComponent(identification)}`,

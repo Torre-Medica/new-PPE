@@ -296,15 +296,18 @@ export function BillingNewCustomerScreen({
   name,
   email,
   phone,
+  address,
   nameError,
   emailError,
   phoneError,
+  addressError,
   generalError,
   loading,
   countdownLabel,
   onEditName,
   onEditEmail,
   onEditPhone,
+  onEditAddress,
   onBack,
   onSave,
   mode = 'create',
@@ -313,28 +316,33 @@ export function BillingNewCustomerScreen({
   // edit: tercero ya registrado; los campos vacios conservan el dato actual
   mode?: 'create' | 'edit';
   // Datos actuales enmascarados (guia en cada campo, modo edicion)
-  currentValues?: { name: string; email: string; phone: string };
+  currentValues?: { name: string; email: string; phone: string; address: string };
   documentLabel: string;
   name: string;
   email: string;
   phone: string;
+  address: string;
   nameError: string | null;
   emailError: string | null;
   phoneError: string | null;
+  addressError: string | null;
   generalError: string | null;
   loading: boolean;
   countdownLabel: string;
   onEditName: () => void;
   onEditEmail: () => void;
   onEditPhone: () => void;
+  onEditAddress: () => void;
   onBack: () => void;
   onSave: () => void;
 }) {
   const editing = mode === 'edit';
-  const guide = (current?: string) => (editing && current ? `Actual: ${current}` : 'Toque para escribir');
+  // En edicion, el dato actual enmascarado sirve de guia; sin dato, se pide escribirlo
+  const guide = (current?: string) =>
+    editing && current ? `Actual: ${current}` : editing ? 'Sin registrar: toque para escribir' : 'Toque para escribir';
   const tips = editing
     ? ['Escriba solo lo que quiera cambiar', 'Lo que deje vacío se conserva', 'La factura llegará al correo registrado']
-    : ['La factura electrónica llegará a este correo', 'Persona: escriba nombre y apellido', 'Ciudad y datos fiscales se llenan solos'];
+    : ['Todos los campos son obligatorios', 'La factura electrónica llegará a este correo', 'Persona: escriba nombre y apellido', 'Teléfono de 10 dígitos'];
 
   return (
     // Pantalla completa clara, igual que la del documento
@@ -348,7 +356,7 @@ export function BillingNewCustomerScreen({
       <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center">
         <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_18rem]">
           {/* section: el teclado sube la pagina hasta que este bloque quede a la vista */}
-          <section className="flex flex-col gap-5">
+          <section className="flex flex-col gap-4">
             <div className="mb-1">
               <h1 className="text-5xl font-extrabold tracking-tight text-[#0b2a5b]">
                 {editing ? 'Actualice sus datos' : 'Registre sus datos para la factura'}
@@ -364,7 +372,6 @@ export function BillingNewCustomerScreen({
               icon="👤"
               value={name}
               placeholder={guide(currentValues?.name)}
-              optional={editing}
               error={nameError}
               onTap={onEditName}
             />
@@ -373,16 +380,25 @@ export function BillingNewCustomerScreen({
               icon="@"
               value={email}
               placeholder={guide(currentValues?.email)}
-              optional={editing}
               error={emailError}
               onTap={onEditEmail}
+            />
+            {/* Direccion de facturacion: obligatoria al registrar */}
+            <TapField
+              label="Dirección"
+              icon="📍"
+              value={address}
+              placeholder={guide(currentValues?.address)}
+              error={addressError}
+              onTap={onEditAddress}
             />
             <TapField
               label="Teléfono"
               icon="📱"
               value={phone}
               placeholder={guide(currentValues?.phone)}
-              optional
+              // Obligatorio al registrar; al editar, vacio conserva el actual
+              optional={editing}
               error={phoneError}
               onTap={onEditPhone}
             />

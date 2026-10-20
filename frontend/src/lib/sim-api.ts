@@ -326,7 +326,7 @@ export function checkElectronicBillingEmail(
 
 export function updateElectronicBillingCustomer(
   identification: string,
-  data: { firstName?: string; lastName?: string; email?: string; phoneNumber?: string },
+  data: { firstName?: string; lastName?: string; email?: string; phoneNumber?: string; address?: string },
 ): Promise<ElectronicBillingCustomerSearch> {
   return apiFetch<ElectronicBillingCustomerSearch>(
     `/electronic-billing/customers/${encodeURIComponent(identification)}`,

@@ -40,11 +40,15 @@ export class ElectronicBillingController {
   @Post('customers')
   async createCustomer(@Body() dto: CreateElectronicBillingCustomerDto) {
     this.assertElectronicBillingEnabled();
-    // '1' es el valor por defecto del DTO cuando no se ingreso telefono
+    // Al registrar, el telefono es obligatorio ('1' es el valor por defecto del DTO
+    // cuando no se envio)
     const phone = dto.phoneNumber === '1' ? '' : dto.phoneNumber;
+    if (!phone?.trim()) throw new BadRequestException('El teléfono es obligatorio');
     this.assertValid(this.contactValidation.checkPhone(phone));
+    // 'C' es el valor por defecto del DTO cuando no se envio direccion
+    this.assertValid(this.contactValidation.checkAddress(dto.address === 'C' ? '' : dto.address));
     this.assertValid(await this.contactValidation.checkEmail(dto.email));
-    return this.nexoBackRestService.createElectronicBillingCustomer(dto);
+    return this.nexoBackRestService.createElectronicBillingCustomer({ ...dto, address: dto.address?.trim() });
   }
 
   // Nombre, correo y/o telefono de un tercero ya registrado (solo lo que cambia)
@@ -59,11 +63,13 @@ export class ElectronicBillingController {
       lastName: dto.lastName?.trim() || undefined,
       email: dto.email?.trim() || undefined,
       phoneNumber: dto.phoneNumber?.replace(/\s/g, '') || undefined,
+      address: dto.address?.trim() || undefined,
     };
-    if (!data.firstName && !data.lastName && !data.email && !data.phoneNumber) {
+    if (!data.firstName && !data.lastName && !data.email && !data.phoneNumber && !data.address) {
       throw new BadRequestException('No hay datos para actualizar');
     }
     this.assertValid(this.contactValidation.checkPhone(data.phoneNumber));
+    if (data.address) this.assertValid(this.contactValidation.checkAddress(data.address));
     if (data.email) this.assertValid(await this.contactValidation.checkEmail(data.email));
     return this.nexoBackRestService.updateElectronicBillingCustomer(identification, data);
   }

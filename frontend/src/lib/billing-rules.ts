@@ -173,3 +173,23 @@ export function maskPhone(phone: string): string {
   if (digits.length < 4) return '';
   return `${'*'.repeat(digits.length - 3)}${digits.slice(-3)}`;
 }
+
+// Direccion del tercero en la respuesta de busqueda (Siigo: { address: { address } })
+export function customerAddress(data: Record<string, unknown>): string {
+  const address = data.address;
+  const value =
+    typeof address === 'string'
+      ? address.trim()
+      : address && typeof address === 'object'
+        ? asText((address as Record<string, unknown>).address)
+        : '';
+  // 'C' es el valor de relleno que ponia Nexo cuando no se enviaba direccion
+  return value.length >= 5 ? value : '';
+}
+
+// "CALLE 10 # 43-21" -> "CALLE 1****"
+export function maskAddress(address: string): string {
+  const value = address.trim().toUpperCase();
+  if (!value) return '';
+  return `${value.slice(0, Math.min(7, Math.ceil(value.length / 2)))}****`;
+}

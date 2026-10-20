@@ -182,6 +182,7 @@ export type ElectronicBillingCustomerUpdate = {
   lastName?: string;
   email?: string;
   phoneNumber?: string;
+  address?: string;
 };
 
 // Cambia nombre, correo y/o telefono de un tercero ya registrado (solo lo que viene)

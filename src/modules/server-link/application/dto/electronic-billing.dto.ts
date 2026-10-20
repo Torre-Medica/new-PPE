@@ -96,6 +96,11 @@ export class UpdateElectronicBillingCustomerEmailDto {
 export class UpdateElectronicBillingCustomerDto {
   @IsOptional()
   @IsString()
+  @MaxLength(256)
+  address?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(80)
   firstName?: string;
 
