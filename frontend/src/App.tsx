@@ -276,6 +276,10 @@ export default function App() {
   const electronicBillingEnabledRef = useRef(false);
   const rootModeRef = useRef<RootMode>('payment');
   const paymentStageRef = useRef<PaymentStage>('idle');
+  // Ultima vez que se entro a 'delivering' o que el sondeo vio la sesion activa
+  const deliveringSinceRef = useRef(0);
+  // Sesion cuyo session.completed ya llego: un sondeo atrasado no la regresa a 'delivering'
+  const completedSessionIdRef = useRef<string | null>(null);
   const paymentSessionIdRef = useRef<string | undefined>(undefined);
   const [keyboardModal, setKeyboardModal] = useState<{
     label: string;
@@ -498,6 +502,7 @@ export default function App() {
 
   useEffect(() => {
     paymentStageRef.current = paymentStage;
+    if (paymentStage === 'delivering') deliveringSinceRef.current = Date.now();
   }, [paymentStage]);
 
   useEffect(() => {
@@ -668,7 +673,9 @@ export default function App() {
           return;
         }
 
-        setPaymentStage('collecting');
+        // Monto cubierto: el pago se cierra solo (cambio + confirmacion con el
+        // servidor), se avisa de inmediato en vez de dejar la pantalla de cobro.
+        setPaymentStage(payload.readyToComplete === true ? 'delivering' : 'collecting');
         setPaymentDetails((current: PaymentDetails) => ({
           ...current,
           ...paymentDetailsFromCashEvent(current, payload),
@@ -686,6 +693,7 @@ export default function App() {
           paymentLoadingTimerRef.current = null;
         }
         setPaymentLoading(false);
+        completedSessionIdRef.current = asString(payload.paymentSessionId) || null;
         setPaymentStage('finalizing');
         const paymentRegistered = payload.paymentRegistered === true;
         setPaymentDetails((current: PaymentDetails) => ({
@@ -1103,7 +1111,15 @@ export default function App() {
             // tiene su propio temporizador de 30s (mas arriba) que decide cuando
             // volver a 'idle' — si este sondeo tambien reacciona aqui, la tumba a
             // los 2s en vez de esperar los 30s de rigor.
-            if (paymentStageRef.current !== 'idle' && paymentStageRef.current !== 'finalizing') {
+            //
+            // 'delivering' tampoco se tumba de inmediato: sin cambio, la sesion pasa por
+            // COMMITTING_TO_SERVER (no cuenta como activa) mientras el servidor confirma,
+            // y session.completed llega segundos despues (ack de hasta 15 s). Si no
+            // llega 25 s despues de la ultima vez que la sesion se vio activa, se suelta.
+            const stage = paymentStageRef.current;
+            const deliveringExpired =
+              stage === 'delivering' && Date.now() - deliveringSinceRef.current > 25_000;
+            if (stage !== 'idle' && stage !== 'finalizing' && (stage !== 'delivering' || deliveringExpired)) {
               setPaymentStage('idle');
               setPaymentDetails(demoPayment);
               resetBillingFlow();
@@ -1112,6 +1128,7 @@ export default function App() {
             }
             return;
           }
+          deliveringSinceRef.current = Date.now();
           applySessionSummary(session);
         })
         .catch(() => undefined);
@@ -1298,6 +1315,9 @@ export default function App() {
   }, [adminCloseouts, closeoutFilterFrom, closeoutFilterTo]);
 
   const applySessionSummary = (session: KioskSessionSummary) => {
+    if (session.paymentSessionId && session.paymentSessionId === completedSessionIdRef.current) {
+      return;
+    }
     const details = paymentDetailsFromSession(session);
     setPaymentDetails(details);
     if (details.sessionType === 'MONTHLY_SUBSCRIPTION') {
@@ -1327,25 +1347,29 @@ export default function App() {
       return;
     }
 
-    // DISPENSING_CHANGE: el backend esta devolviendo el cambio (~20-25 s) antes
-    // de confirmar con el servidor central. Sin este caso, el sondeo de cada 2 s
-    // caia al 'idle' de abajo y la pantalla volvia al inicio justo al terminar
-    // de pagar, sin mostrar "Gracias por su pago" ni la opcion de imprimir.
-    if (
-      session.status === 'LISTENING_CASH' ||
-      session.status === 'CHANGE_PENDING' ||
-      session.status === 'DISPENSING_CHANGE' ||
-      session.status === 'READY_TO_COMMIT'
-    ) {
+    if (session.status === 'LISTENING_CASH') {
       setPaymentStage('collecting');
       // setStatusMessage('Recepcion de efectivo habilitada');
       return;
     }
 
+    // Monto cubierto: el backend entrega el cambio y confirma con el servidor
+    // central. Sin este caso, el sondeo de cada 2 s caia al 'idle' de abajo y la
+    // pantalla volvia al inicio justo al terminar de pagar. COMMITTING_TO_SERVER
+    // va aqui y no en 'finalizing': aun no hay confirmacion para decir "puede salir".
+    if (
+      session.status === 'CHANGE_PENDING' ||
+      session.status === 'DISPENSING_CHANGE' ||
+      session.status === 'READY_TO_COMMIT' ||
+      session.status === 'COMMITTING_TO_SERVER'
+    ) {
+      setPaymentStage('delivering');
+      return;
+    }
+
     if (
       session.status === 'COMPLETED' ||
-      session.status === 'COMPLETED_WITH_WARNING' ||
-      session.status === 'COMMITTING_TO_SERVER'
+      session.status === 'COMPLETED_WITH_WARNING'
     ) {
       setPaymentStage('finalizing');
       // setStatusMessage('Pago finalizado. Puede imprimir su comprobante');
@@ -2944,6 +2968,42 @@ export default function App() {
                       </div>
                     </div>
                   )}
+                </div>
+              )}
+
+              {paymentStage === 'delivering' && (
+                <div className="glass-panel flex flex-col items-center justify-center gap-5 py-10">
+                  <svg className="h-16 w-16 animate-spin text-brand-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  <div className="text-center">
+                    <h2 className="text-3xl font-bold tracking-[-0.04em] text-ink">Pago recibido</h2>
+                    <p className="mt-2 text-xl text-ink">
+                      {paymentDetails.changeAmount > 0
+                        ? `Entregando su cambio de $ ${currency.format(paymentDetails.changeAmount)}...`
+                        : 'Confirmando su pago...'}
+                    </p>
+                    <p className="mt-1 text-base text-muted">
+                      {paymentDetails.changeAmount > 0
+                        ? 'Retire el dinero de la bandeja y espere la confirmacion'
+                        : 'Por favor espere unos segundos'}
+                    </p>
+                  </div>
+                  <div className="grid w-full max-w-sm gap-3 sm:grid-cols-2">
+                    <div className="rounded-3xl border border-black/10 bg-white/80 p-4 text-center">
+                      <p className="text-xs uppercase tracking-[0.18em] text-muted">Pagado</p>
+                      <p className="mt-1 text-xl font-semibold text-ink">
+                        $ {currency.format(paymentDetails.insertedAmount)}
+                      </p>
+                    </div>
+                    <div className="rounded-3xl border border-black/10 bg-white/80 p-4 text-center">
+                      <p className="text-xs uppercase tracking-[0.18em] text-muted">Devuelta</p>
+                      <p className="mt-1 text-xl font-semibold text-ink">
+                        $ {currency.format(paymentDetails.changeAmount)}
+                      </p>
+                    </div>
+                  </div>
                 </div>
               )}
 

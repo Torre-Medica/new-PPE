@@ -7,7 +7,7 @@ export interface DispenserSlot {
   isActive: boolean;
   quantity: number;
 }
-export type PaymentStage = 'idle' | 'scanning' | 'review' | 'collecting' | 'finalizing';
+export type PaymentStage = 'idle' | 'scanning' | 'review' | 'collecting' | 'delivering' | 'finalizing';
 
 export interface MonthlySubscriptionDetails {
   type?: 'MONTHLY_SUBSCRIPTION';

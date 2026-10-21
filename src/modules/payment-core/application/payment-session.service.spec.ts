@@ -316,6 +316,96 @@ describe('PaymentSessionService', () => {
     );
   });
 
+  it('sends the server commit while the change is still being dispensed, keeping the session in DispensingChange', async () => {
+    const { service, paymentSessionRepository, cashChangeService, peripheralsService, serverLinkService } =
+      createService();
+
+    const session = makeSession({
+      targetAmount: 4000,
+      insertedAmount: 5000,
+      changeAmount: 1000,
+      status: PaymentSessionStatus.ChangePending,
+    });
+    paymentSessionRepository.findOne
+      .mockResolvedValueOnce(session)
+      .mockResolvedValueOnce(
+        makeSession({ status: PaymentSessionStatus.Completed, serverSyncStatus: ServerSyncStatus.Confirmed }),
+      );
+    cashChangeService.planChange.mockResolvedValue({
+      remaining: 0,
+      items: [{ denominationId: 1000, quantity: 1 }],
+    });
+
+    let finishDispense: (value: unknown[]) => void = () => undefined;
+    peripheralsService.returnChange.mockReturnValue(
+      new Promise((resolve) => {
+        finishDispense = resolve;
+      }),
+    );
+    serverLinkService.commitPayment.mockResolvedValue({ paymentRegistered: true, serverPaymentId: 903 });
+
+    const completion = service.completeSession('session-1', { committedBy: 'unit-test' });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // El commit ya salio aunque la maquina sigue entregando
+    expect(serverLinkService.commitPayment).toHaveBeenCalledTimes(1);
+    expect(paymentSessionRepository.update).not.toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({ status: PaymentSessionStatus.CommittingToServer }),
+    );
+    expect(paymentSessionRepository.update).not.toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({ status: PaymentSessionStatus.Completed }),
+    );
+
+    finishDispense([]);
+    const result = await completion;
+
+    expect(serverLinkService.commitPayment).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe(PaymentSessionStatus.Completed);
+    expect(paymentSessionRepository.update).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({
+        status: PaymentSessionStatus.Completed,
+        serverSyncStatus: ServerSyncStatus.Confirmed,
+        serverPaymentId: 903,
+      }),
+    );
+  });
+
+  it('still records the server commit when dispensing the change fails, and rethrows', async () => {
+    const { service, paymentSessionRepository, cashChangeService, peripheralsService, serverLinkService } =
+      createService();
+
+    paymentSessionRepository.findOne.mockResolvedValueOnce(
+      makeSession({
+        targetAmount: 4000,
+        insertedAmount: 5000,
+        changeAmount: 1000,
+        status: PaymentSessionStatus.ChangePending,
+      }),
+    );
+    cashChangeService.planChange.mockResolvedValue({
+      remaining: 0,
+      items: [{ denominationId: 1000, quantity: 1 }],
+    });
+    peripheralsService.returnChange.mockRejectedValue(new Error('puerto serial cerrado'));
+    serverLinkService.commitPayment.mockResolvedValue({ paymentRegistered: true, serverPaymentId: 904 });
+
+    await expect(
+      service.completeSession('session-1', { committedBy: 'unit-test' }),
+    ).rejects.toThrow('puerto serial cerrado');
+
+    expect(serverLinkService.commitPayment).toHaveBeenCalledTimes(1);
+    expect(paymentSessionRepository.update).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({
+        status: PaymentSessionStatus.Completed,
+        serverPaymentId: 904,
+      }),
+    );
+  });
+
   // ── Fase 10: error de inventario insuficiente para cambio ─────────────────
 
   it('throws InsufficientChangeError when inventory cannot cover change', async () => {
@@ -608,6 +698,8 @@ describe('PaymentSessionService', () => {
     });
 
     paymentSessionRepository.findOne
+      .mockResolvedValueOnce(session)
+      // chequeo de commit duplicado: la sesion aun no estaba confirmada
       .mockResolvedValueOnce(session)
       .mockResolvedValueOnce(warningSession);
     serverLinkService.commitPayment.mockResolvedValue({ paymentRegistered: false });

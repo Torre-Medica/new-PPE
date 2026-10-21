@@ -50,6 +50,9 @@ import { SERVER_LINK_PORT } from '@modules/server-link/domain/ports/server-link.
 import type { ServerLinkPort } from '@modules/server-link/domain/ports/server-link.port';
 import { DispenserSlotEntity } from '@modules/persistence/infrastructure/entities/dispenser-slot.entity';
 
+/** Respuesta cruda del servidor central a un commit (o el error del envio). */
+type CommitOutcome = { response: unknown };
+
 type MonthlySubscriptionMetadata = {
   type: 'MONTHLY_SUBSCRIPTION';
   stage: 'CUSTOMER_LOOKUP' | 'AWAITING_PLATE' | 'VALIDATED';
@@ -92,6 +95,11 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
   // fisicamente, asi que reintentamos solos en vez de esperar a un operador.
   private static readonly AUTO_RETRY_INTERVAL_MS = 15_000;
   private static readonly AUTO_RETRY_WINDOW_MS = 5 * 60_000;
+  // Un commit en curso (COMMITTING_TO_SERVER) solo se reintenta pasado el timeout del
+  // ack (15 s) con margen: antes, el reintento cada 15 s tomaba sesiones cuyo primer
+  // commit seguia esperando respuesta, el servidor contestaba "ya emitida" y esa
+  // respuesta pisaba la confirmacion buena (pagos registrados marcados como rechazados).
+  private static readonly COMMIT_IN_FLIGHT_GRACE_MS = 30_000;
   // Red de seguridad ademas de la sincronizacion inmediata tras cada mutacion
   // de slots (carga, descarga, expulsion, dispensado de cambio, reembolso)
   private static readonly CASH_SYNC_INTERVAL_MS = 10 * 60_000;
@@ -1095,6 +1103,8 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
     }
 
     const committedBy = dto.committedBy ?? 'payment-session';
+    // Con cambio, el commit al servidor corre en paralelo con la entrega (ver abajo)
+    let parallelCommit: Promise<CommitOutcome> | null = null;
 
     if (session.changeAmount > 0) {
       // Leer configuración de slots desde la DB (qué denominación está cargada en cada dispensador)
@@ -1172,7 +1182,26 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       // que manda la misma trama pero espera el ACK). El numero que se cuadra de verdad es el total de
       // dinero en tolvas (changeInventoryTotal), ajustado por el operador en cada
       // cierre contra el conteo fisico — no el desglose exacto por denominacion.
-      const commandAudit = await this.peripheralsService.returnChange(returnItems);
+      //
+      // El monto y el cambio ya estan definidos, asi que el commit al servidor se
+      // lanza ya y corre mientras la maquina entrega (antes iba despues y sumaba
+      // ~5 s a la espera del cliente). La sesion sigue en DispensingChange hasta
+      // aplicar el resultado: asi cuenta como sesion activa para el kiosko y el
+      // autoRetry no la toma como commit pendiente.
+      parallelCommit = this.sendCommitToServer(session, committedBy);
+      parallelCommit.catch(() => undefined); // se espera abajo; evita rechazo no manejado
+
+      let commandAudit: Awaited<ReturnType<PeripheralsService['returnChange']>>;
+      try {
+        commandAudit = await this.peripheralsService.returnChange(returnItems);
+      } catch (error) {
+        // El cobro queda registrado igual (como cuando el recovery de DispensingChange
+        // hacia el commit) y el error sigue su curso para alertar al operador.
+        await parallelCommit
+          .then((outcome) => this.applyCommitOutcome(session, committedBy, outcome))
+          .catch(() => undefined);
+        throw error;
+      }
 
       await this.paymentSessionRepository.update(sessionId, {
         changeCommandsJson: JSON.stringify(commandAudit),
@@ -1189,7 +1218,9 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
     }
 
     this.peripheralsService.deactivateAcceptance();
-    const updatedSession = await this.commitSessionToServer(session, committedBy);
+    const updatedSession = parallelCommit
+      ? await this.applyCommitOutcome(session, committedBy, await parallelCommit)
+      : await this.commitSessionToServer(session, committedBy);
 
     this.kioskEventsService.emit('session.completed', {
       paymentSessionId: updatedSession.id,
@@ -1309,6 +1340,9 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
           status: PaymentSessionStatus.CommittingToServer,
           serverSyncStatus: ServerSyncStatus.Pending,
           serverPaymentId: IsNull(),
+          updatedAt: LessThan(
+            new Date(Date.now() - PaymentSessionService.COMMIT_IN_FLIGHT_GRACE_MS),
+          ),
         },
       ],
       order: { updatedAt: 'ASC' },
@@ -1479,6 +1513,15 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       status: PaymentSessionStatus.CommittingToServer,
     });
 
+    const outcome = await this.sendCommitToServer(session, committedBy);
+    return this.applyCommitOutcome(session, committedBy, outcome);
+  }
+
+  /** Envia el commit al servidor central y guarda el intento; no toca el estado de la sesion. */
+  private async sendCommitToServer(
+    session: PaymentSessionEntity,
+    committedBy: string,
+  ): Promise<CommitOutcome> {
     const electronicBilling = this.extractElectronicBillingFromMetadata(
       session.metadataJson,
     );
@@ -1546,6 +1589,15 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       }),
     );
 
+    return { response };
+  }
+
+  /** Aplica la respuesta del servidor a la sesion: estado final, metadata y evento. */
+  private async applyCommitOutcome(
+    session: PaymentSessionEntity,
+    committedBy: string,
+    { response }: CommitOutcome,
+  ) {
     const responseRecord =
       typeof response === 'object' && response !== null
         ? (response as Record<string, unknown>)
@@ -1555,6 +1607,29 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       typeof responseRecord.serverPaymentId === 'number'
         ? responseRecord.serverPaymentId
         : null;
+
+    // Respaldo: si otro commit de esta sesion ya quedo confirmado, una respuesta negativa
+    // que llegue despues (duplicado) no la degrada a rechazada.
+    if (!paymentRegistered) {
+      const current = await this.paymentSessionRepository.findOne({
+        where: { id: session.id },
+      });
+      if (current?.serverSyncStatus === ServerSyncStatus.Confirmed) {
+        // Este commit pudo haber marcado la sesion como COMMITTING_TO_SERVER al empezar;
+        // se devuelve a COMPLETED para que cuente en los cierres de caja.
+        if (current.status !== PaymentSessionStatus.Completed) {
+          await this.paymentSessionRepository.update(session.id, {
+            status: PaymentSessionStatus.Completed,
+          });
+        }
+        await this.appendEvent(session.id, 'payment.sync.duplicate-ignored', null, {
+          committedBy,
+          serverPaymentId,
+          response: responseRecord,
+        });
+        return this.getSessionById(session.id);
+      }
+    }
 
     const finalStatus = paymentRegistered
       ? PaymentSessionStatus.Completed
