@@ -85,6 +85,14 @@ type MonthlyIdentification = {
   paddedFromEightDigits: boolean;
 };
 
+// Datos de la pantalla "Tiempo de gracia" del kiosko
+export interface QrGraceInfo {
+  graceUntil: string;
+  graceMinutes: number;
+  vehiclePlate: string | null;
+  vehicleType: 'CARRO' | 'MOTO' | null;
+}
+
 @Injectable()
 export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger(PaymentSessionService.name);
@@ -1976,6 +1984,7 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
         this.kioskEventsService.emit('qr.ignored', {
           qrCode: event.qrCode,
           reason: evaluation.reason,
+          ...(evaluation.grace ? { grace: evaluation.grace } : {}),
         });
         return;
       }
@@ -2225,6 +2234,23 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
     }
   }
 
+  /** Ventana de salida gratis que manda nexo_back (graceUntil/graceMinutes), si sigue vigente. */
+  private readGraceInfo(response: Record<string, unknown>): QrGraceInfo | undefined {
+    const until = typeof response.graceUntil === 'string' ? new Date(response.graceUntil) : null;
+    const minutes = typeof response.graceMinutes === 'number' ? response.graceMinutes : null;
+    if (!until || Number.isNaN(until.getTime()) || until.getTime() <= Date.now() || !minutes) {
+      return undefined;
+    }
+    const plate = typeof response.vehiclePlate === 'string' ? response.vehiclePlate.trim() : '';
+    const kind = typeof response.vehicleType === 'string' ? response.vehicleType.toUpperCase() : '';
+    return {
+      graceUntil: until.toISOString(),
+      graceMinutes: minutes,
+      vehiclePlate: plate || null,
+      vehicleType: kind === 'MOTO' ? 'MOTO' : kind === 'CARRO' ? 'CARRO' : null,
+    };
+  }
+
   private evaluateQrValidationResponse(response: unknown): {
     accepted: boolean;
     eventType: string;
@@ -2237,11 +2263,14 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
     incomeConditionType: string | null;
     identificationType: string | null;
     identificationCode: string | null;
+    // Sin cobro y aun dentro de la ventana para salir gratis (pantalla de gracia)
+    grace?: QrGraceInfo;
   } {
     const responseRecord =
       typeof response === 'object' && response !== null
         ? (response as Record<string, unknown>)
         : {};
+    const grace = this.readGraceInfo(responseRecord);
 
     const status = typeof responseRecord.status === 'string'
       ? responseRecord.status.toUpperCase()
@@ -2282,6 +2311,7 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
         accepted: false,
         eventType: 'payment.qr.already-paid',
         reason: friendlyReason,
+        grace,
         amountDue: 0,
         serverProcessId: null,
         vehiclePlate: null,
@@ -2368,6 +2398,25 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       };
     }
 
+    // $0 y aun en la ventana para salir gratis: no hay nada que cobrar, se muestra la
+    // pantalla de tiempo de gracia (tambien con SIMULATE_HARDWARE)
+    if (amountDue <= 0 && grace) {
+      return {
+        accepted: false,
+        eventType: 'payment.qr.already-paid',
+        reason: 'Aun esta en tiempo de gracia, no requiere pago',
+        grace,
+        amountDue: 0,
+        serverProcessId: null,
+        vehiclePlate: null,
+        vehicleType: null,
+        concept: null,
+        incomeConditionType: null,
+        identificationType: null,
+        identificationCode: null,
+      };
+    }
+
     // Solo en pruebas (SIMULATE_HARDWARE=true) un ticket en $0 sigue a la revision,
     // para poder probar las pantallas aunque la tarifa local este en cero.
     if (amountDue <= 0 && !this.allowsZeroAmountForTesting()) {
@@ -2381,6 +2430,7 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
         accepted: false,
         eventType: 'payment.qr.already-paid',
         reason: 'No requiere pago en este momento (ya pagado o en tiempo de gracia)',
+        grace,
         amountDue: 0,
         serverProcessId: null,
         vehiclePlate: null,

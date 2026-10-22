@@ -4,6 +4,7 @@ import * as realApi from './lib/api';
 import * as simApi from './lib/sim-api';
 import { getSimEventSource } from './lib/sim-events';
 import { SimPanel } from './components/SimPanel';
+import { GRACE_SCREEN_SECONDS, GraceScreen, type GraceInfo } from './components/GraceScreen';
 import { KeyboardModal } from './components/KeyboardModal';
 import {
   BillingConfirmScreen,
@@ -242,6 +243,10 @@ export default function App() {
   const [reviewInteractionVersion, setReviewInteractionVersion] = useState(0);
   const [statusMessage, setStatusMessage] = useState('Escanee su QR para iniciar el pago');
   const [cancelNotice, setCancelNotice] = useState<string | null>(null);
+  // QR sin cobro y aun en la ventana para salir gratis: pantalla "Tiempo de gracia"
+  const [graceInfo, setGraceInfo] = useState<GraceInfo | null>(null);
+  // Cambia con cada lectura: reinicia la pantalla (y su cuenta regresiva)
+  const [graceShowId, setGraceShowId] = useState(0);
   const [maintenanceReason, setMaintenanceReason] = useState<string | null>(null);
   const [electronicBillingEnabled, setElectronicBillingEnabled] = useState(false);
   const [electronicBillingRequested, setElectronicBillingRequested] = useState(false);
@@ -566,6 +571,7 @@ export default function App() {
       });
 
       eventSource.addEventListener('qr.processing', () => {
+        setGraceInfo(null);
         setPaymentStage('scanning');
         setStatusMessage('Validando lectura con el servidor...');
       });
@@ -585,6 +591,17 @@ export default function App() {
         setPaymentDetails(demoPayment);
         resetBillingFlow();
         resetMonthlyFlow();
+        // Sin cobro y aun en gracia: se muestra la pantalla de tiempo de gracia
+        const grace = payload?.grace as Partial<GraceInfo> | undefined;
+        if (grace && typeof grace.graceUntil === 'string' && typeof grace.graceMinutes === 'number') {
+          setGraceShowId((current) => current + 1);
+          setGraceInfo({
+            graceUntil: grace.graceUntil,
+            graceMinutes: grace.graceMinutes,
+            vehiclePlate: typeof grace.vehiclePlate === 'string' ? grace.vehiclePlate : null,
+            vehicleType: grace.vehicleType === 'MOTO' || grace.vehicleType === 'CARRO' ? grace.vehicleType : null,
+          });
+        }
         setStatusMessage(
           typeof payload?.reason === 'string'
             ? payload.reason
@@ -1042,6 +1059,13 @@ export default function App() {
     paymentStage,
     sessionTimeoutsSeconds.cash,
   ]);
+
+  // La pantalla de gracia se cierra sola (o con la siguiente lectura)
+  useEffect(() => {
+    if (!graceInfo) return;
+    const timer = window.setTimeout(() => setGraceInfo(null), GRACE_SCREEN_SECONDS * 1000);
+    return () => window.clearTimeout(timer);
+  }, [graceInfo]);
 
   useEffect(() => {
     if (!cancelNotice) return;
@@ -3822,6 +3846,8 @@ export default function App() {
           onDismiss={() => setKeyboardModal(null)}
         />
       )}
+
+      {graceInfo && rootMode === 'payment' && <GraceScreen key={graceShowId} info={graceInfo} />}
 
       {cancelNotice && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60">

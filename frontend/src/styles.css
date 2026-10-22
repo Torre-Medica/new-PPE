@@ -31,6 +31,16 @@
   button {
     @apply cursor-pointer;
   }
+
+  /* Pantalla tactil de la Raspberry (Touch Display 2, 1280x720 en horizontal): las
+     pantallas completas (documento, registro/edicion del tercero, tiempo de gracia) se
+     disenaron para 1920x1080 y usan rem; mientras estan abiertas se reduce la base
+     para que quepan sin scroll (ver useCompactScreen). El resto conserva su tamano. */
+  @media (max-height: 760px) {
+    html.compact-screen {
+      font-size: 13px;
+    }
+  }
 }
 
 @layer components {

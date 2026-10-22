@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { useCompactScreen } from '../../lib/useCompactScreen';
 
 // Pantallas de la factura a terceros (3: documento, 4A: confirmar, 4B: cliente nuevo).
 // El estado vive en App; aqui solo se dibuja y se avisa de cada accion.
@@ -87,6 +88,7 @@ export function BillingDocumentScreen({
   onBack: () => void;
   onContinue: () => void;
 }) {
+  useCompactScreen();
   const press = (key: string) => {
     if (loading) return;
     if (key === '⌫') onChange(value.slice(0, -1));
@@ -336,6 +338,7 @@ export function BillingNewCustomerScreen({
   onBack: () => void;
   onSave: () => void;
 }) {
+  useCompactScreen();
   const editing = mode === 'edit';
   // En edicion, el dato actual enmascarado sirve de guia; sin dato, se pide escribirlo
   const guide = (current?: string) =>
