@@ -2801,11 +2801,20 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       concept: session.concept,
       vehiclePlate: session.vehiclePlate,
       vehicleType: session.vehicleType,
-      enteredAt: session.startedAt.toISOString(),
+      // Hora real de entrada que dio nexo_back al validar (la misma de la tirilla);
+      // startedAt es la hora del escaneo en el PPE y solo sirve de respaldo.
+      enteredAt: this.resolveEnteredAt(session),
       startedAt: session.startedAt.toISOString(),
       acceptancePolicy,
       monthlySubscription,
     };
+  }
+
+  private resolveEnteredAt(session: PaymentSessionEntity): string {
+    const validation = this.asRecord(this.parseMetadata(session.metadataJson).validation);
+    return typeof validation.startDatetime === 'string'
+      ? validation.startDatetime
+      : session.startedAt.toISOString();
   }
 
   private resolveReviewDatetime(

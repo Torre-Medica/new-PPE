@@ -1139,6 +1139,32 @@ describe('PaymentSessionService', () => {
     ).rejects.toBeInstanceOf(PaymentSessionConflictError);
   });
 
+  it('reports the real entry time from the server validation, not the PPE scan time, in the active session', async () => {
+    const { service, paymentSessionRepository } = createService();
+    paymentSessionRepository.findOne.mockResolvedValueOnce(
+      makeSession({
+        status: PaymentSessionStatus.Validated,
+        startedAt: new Date('2026-10-23T12:04:55.000Z'),
+        metadataJson: JSON.stringify({ validation: { startDatetime: '2026-10-23T10:56:37.000Z' } }),
+      }),
+    );
+
+    const summary = await service.getActiveSessionSummary();
+
+    expect(summary?.enteredAt).toBe('2026-10-23T10:56:37.000Z');
+  });
+
+  it('falls back to the scan time when the validation has no entry time', async () => {
+    const { service, paymentSessionRepository } = createService();
+    paymentSessionRepository.findOne.mockResolvedValueOnce(
+      makeSession({ status: PaymentSessionStatus.Validated, startedAt: new Date('2026-10-23T12:04:55.000Z') }),
+    );
+
+    const summary = await service.getActiveSessionSummary();
+
+    expect(summary?.enteredAt).toBe('2026-10-23T12:04:55.000Z');
+  });
+
   // ── Pipeline completo: QR → 2 billetes → cambio → commit ─────────────────
 
   describe('pipeline completo — QR → efectivo → cambio → commit', () => {
