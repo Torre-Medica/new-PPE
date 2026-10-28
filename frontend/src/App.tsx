@@ -231,6 +231,17 @@ const demoPayment: PaymentDetails = {
   changeAmount: 0,
 };
 
+// Recorte de pantalla-inicio.jpg (1810x869, en px de la imagen) como fondo de un bloque.
+// Llena el bloque sin deformar cuando el bloque tiene la misma proporcion que el recorte.
+const INICIO_W = 1810;
+const INICIO_H = 869;
+const inicioCrop = (x: number, y: number, w: number, h: number) => ({
+  backgroundImage: 'url(/pantalla-inicio.jpg)',
+  backgroundRepeat: 'no-repeat',
+  backgroundSize: `${(INICIO_W / w) * 100}% ${(INICIO_H / h) * 100}%`,
+  backgroundPosition: `${(x / (INICIO_W - w)) * 100}% ${(y / (INICIO_H - h)) * 100}%`,
+});
+
 export default function App() {
   const [rootMode, setRootMode] = useState<RootMode>('payment');
   const [paymentStage, setPaymentStage] = useState<PaymentStage>('idle');
@@ -2373,7 +2384,7 @@ export default function App() {
 
     try {
       await printKioskReceipt(paymentDetails.paymentSessionId);
-      resetPaymentToIdle('Comprobante enviado a la impresora del PPE');
+      resetPaymentToIdle('Escanee su QR para iniciar el pago');
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'No fue posible imprimir el comprobante');
     } finally {
@@ -2730,24 +2741,23 @@ export default function App() {
               {paymentStage === 'idle' && (
                 // Pantalla de inicio a pantalla completa. Va debajo del logo fijo (z-40),
                 // que conserva los toques para abrir el panel; la imagen no trae logo propio.
-                <div className="fixed inset-0 z-30 flex items-center justify-center bg-white">
-                  {/* Caja con la proporcion de la imagen (1810x869): se ve completa y sin deformar
-                      en cualquier pantalla (el kiosco es 1024x768); el logo conserva su posicion en % */}
-                  <div className="relative" style={{ width: 'min(100vw, calc(100vh * 1810 / 869))', aspectRatio: '1810 / 869' }}>
-                  {/* Imagen al 100% de la pantalla; el logo va en la esquina blanca
-                      (posicion en % de la imagen 1810x869), con los mismos toques */}
-                  <img
-                    src="/pantalla-inicio.jpg"
-                    alt="Acerque el QR de su tiquete al lector a 10 - 15 cm"
-                    className="h-full w-full select-none object-contain"
-                    draggable={false}
-                  />
-                  <span
-                    className="absolute left-[7.3%] top-[7.4%] w-[10.5%] -translate-x-1/2 -translate-y-1/2 select-none cursor-default"
-                    onClick={unlock.onClick}
-                  >
-                    <img src="/LogoCoins.png" alt="PPE Logo" className="w-full" draggable={false} />
-                  </span>
+                <div className="fixed inset-0 z-30 flex flex-col bg-white">
+                  {/* La pantalla del PPE es 4:3 (1024x768) y la imagen 1810x869: se reparte en bloques
+                      (titulo, foto principal y los 3 recuadros) recortados de la misma imagen, con alturas
+                      en vh que mantienen la proporcion de cada recorte: ocupa el 100% sin deformar */}
+                  <div className="flex h-[15.5vh] items-center gap-6 px-6">
+                    <span className="h-[55%] select-none cursor-default" onClick={unlock.onClick}>
+                      <img src="/LogoCoins.png" alt="PPE Logo" className="h-full w-auto" draggable={false} />
+                    </span>
+                    <p className="m-0 flex-1 text-center text-[4.2vh] font-bold text-[#0b4fa3]">
+                      Acerque el QR de su tiquete al lector a 10 - 15 cm
+                    </p>
+                  </div>
+                  <div className="h-[61vh] w-full" style={inicioCrop(200, 0, 1126, 515)} />
+                  <div className="flex h-[23.5vh] w-full">
+                    {[32, 613, 1194].map((x) => (
+                      <div key={x} className="h-full flex-1" style={inicioCrop(x, 533, 580, 307)} />
+                    ))}
                   </div>
                   {/* Solo se muestran avisos (p. ej. sin conexion), no el mensaje normal */}
                   {statusMessage !== 'Escanee su QR para iniciar el pago' && (
