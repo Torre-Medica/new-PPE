@@ -5,6 +5,9 @@ import { useEffect, useState } from 'react';
 // public/inicio-ejemplo-N.jpg (565x240). Sirve en 16:9 (Raspberry 1280x720) y 4:3 (1024x768).
 
 const DEFAULT_MESSAGE = 'Escanee su QR para iniciar el pago';
+// Mensajes informativos o internos que quedan del pago anterior: no son un aviso para el
+// usuario. Los rechazos del QR (no encontrado, ya pagado, etc.) si se muestran.
+const HIDDEN_NOTICE = /Revise el valor a cobrar|^Validando lectura|^Pago finalizado|^Debounce|^Ya hay una lectura QR/i;
 const HERO_W = 1810;
 const HERO_H = 516;
 const pct = (value: number, total: number) => `${(value / total) * 100}%`;
@@ -25,7 +28,10 @@ interface IdleScreenProps {
 export function IdleScreen({ statusMessage, electronicBillingEnabled, onLogoClick }: IdleScreenProps) {
   const [active, setActive] = useState(0);
   const offline = /^(Sin conexion|Reconectando)/i.test(statusMessage);
-  const notice = !offline && statusMessage !== DEFAULT_MESSAGE ? statusMessage : null;
+  const notice =
+    !offline && statusMessage !== DEFAULT_MESSAGE && !HIDDEN_NOTICE.test(statusMessage)
+      ? statusMessage
+      : null;
 
   // Resalta una tarjeta a la vez: correcto -> muy cerca -> muy lejos
   useEffect(() => {
@@ -115,7 +121,7 @@ export function IdleScreen({ statusMessage, electronicBillingEnabled, onLogoClic
         {electronicBillingEnabled && <InfoItem icon="invoice">Factura electrónica</InfoItem>}
       </div>
 
-      {/* Avisos puntuales (p. ej. QR no valido) */}
+      {/* Rechazos del QR (p. ej. no encontrado o ya pagado) */}
       {notice && (
         <p className="absolute left-1/2 top-6 -translate-x-1/2 rounded-full bg-[#0b2a5b]/90 px-6 py-2 text-center text-xl font-semibold text-white shadow-lg">
           {notice}
