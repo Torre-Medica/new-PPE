@@ -4,6 +4,7 @@ import * as realApi from './lib/api';
 import * as simApi from './lib/sim-api';
 import { getSimEventSource } from './lib/sim-events';
 import { SimPanel } from './components/SimPanel';
+import { IdleScreen } from './components/IdleScreen';
 import { GRACE_SCREEN_SECONDS, GraceScreen, type GraceInfo } from './components/GraceScreen';
 import { KeyboardModal } from './components/KeyboardModal';
 import {
@@ -230,17 +231,6 @@ const demoPayment: PaymentDetails = {
   insertedItems: [],
   changeAmount: 0,
 };
-
-// Recorte de pantalla-inicio.jpg (1810x869, en px de la imagen) como fondo de un bloque.
-// Llena el bloque sin deformar cuando el bloque tiene la misma proporcion que el recorte.
-const INICIO_W = 1810;
-const INICIO_H = 869;
-const inicioCrop = (x: number, y: number, w: number, h: number) => ({
-  backgroundImage: 'url(/pantalla-inicio.jpg)',
-  backgroundRepeat: 'no-repeat',
-  backgroundSize: `${(INICIO_W / w) * 100}% ${(INICIO_H / h) * 100}%`,
-  backgroundPosition: `${(x / (INICIO_W - w)) * 100}% ${(y / (INICIO_H - h)) * 100}%`,
-});
 
 export default function App() {
   const [rootMode, setRootMode] = useState<RootMode>('payment');
@@ -613,8 +603,9 @@ export default function App() {
             vehicleType: grace.vehicleType === 'MOTO' || grace.vehicleType === 'CARRO' ? grace.vehicleType : null,
           });
         }
+        // Con la pantalla de gracia no se muestra el aviso de texto (la vista ya lo explica)
         setStatusMessage(
-          typeof payload?.reason === 'string'
+          typeof payload?.reason === 'string' && !grace
             ? payload.reason
             : 'Escanee su QR para iniciar el pago',
         );
@@ -2739,33 +2730,12 @@ export default function App() {
               )}
 
               {paymentStage === 'idle' && (
-                // Pantalla de inicio a pantalla completa. Va debajo del logo fijo (z-40),
-                // que conserva los toques para abrir el panel; la imagen no trae logo propio.
-                <div className="fixed inset-0 z-30 flex flex-col bg-white">
-                  {/* La pantalla del PPE es 4:3 (1024x768) y la imagen 1810x869: se reparte en bloques
-                      (titulo, foto principal y los 3 recuadros) recortados de la misma imagen, con alturas
-                      en vh que mantienen la proporcion de cada recorte: ocupa el 100% sin deformar */}
-                  <div className="flex h-[15.5vh] items-center gap-6 px-6">
-                    <span className="h-[55%] select-none cursor-default" onClick={unlock.onClick}>
-                      <img src="/LogoCoins.png" alt="PPE Logo" className="h-full w-auto" draggable={false} />
-                    </span>
-                    <p className="m-0 flex-1 text-center text-[4.2vh] font-bold text-[#0b4fa3]">
-                      Acerque el QR de su tiquete al lector a 10 - 15 cm
-                    </p>
-                  </div>
-                  <div className="h-[61vh] w-full" style={inicioCrop(200, 0, 1126, 515)} />
-                  <div className="flex h-[23.5vh] w-full">
-                    {[32, 613, 1194].map((x) => (
-                      <div key={x} className="h-full flex-1" style={inicioCrop(x, 533, 580, 307)} />
-                    ))}
-                  </div>
-                  {/* Solo se muestran avisos (p. ej. sin conexion), no el mensaje normal */}
-                  {statusMessage !== 'Escanee su QR para iniciar el pago' && (
-                    <p className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-[#0b2a5b]/90 px-6 py-2 text-xl font-semibold text-white shadow-lg">
-                      {statusMessage}
-                    </p>
-                  )}
-                </div>
+                // Pantalla de inicio (solo visual). El logo de los toques va dentro del componente.
+                <IdleScreen
+                  statusMessage={statusMessage}
+                  electronicBillingEnabled={electronicBillingEnabled}
+                  onLogoClick={unlock.onClick}
+                />
               )}
 
               {paymentStage === 'scanning' && (

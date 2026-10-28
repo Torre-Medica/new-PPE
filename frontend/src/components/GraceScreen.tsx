@@ -20,7 +20,7 @@ function formatRemaining(ms: number) {
 }
 
 // Segundos que la pantalla queda visible antes de volver al inicio
-export const GRACE_SCREEN_SECONDS = 20;
+export const GRACE_SCREEN_SECONDS = 10;
 
 export function GraceScreen({ info }: { info: GraceInfo }) {
   useCompactScreen();
