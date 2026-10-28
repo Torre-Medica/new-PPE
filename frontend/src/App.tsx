@@ -2728,12 +2728,29 @@ export default function App() {
               )}
 
               {paymentStage === 'idle' && (
-                <div className="flex flex-col items-center justify-center py-2">
+                // Pantalla de inicio a pantalla completa. Va debajo del logo fijo (z-40),
+                // que conserva los toques para abrir el panel; la imagen no trae logo propio.
+                <div className="fixed inset-0 z-30 bg-white">
+                  {/* Imagen al 100% de la pantalla; el logo va en la esquina blanca
+                      (posicion en % de la imagen 1810x869), con los mismos toques */}
                   <img
-                    src="/ImagenEscanear.jpeg"
-                    alt="Escanee su QR"
-                    className="h-96 w-auto rounded-4xl shadow-kiosk"
+                    src="/pantalla-inicio.jpg"
+                    alt="Acerque el QR de su tiquete al lector a 10 - 15 cm"
+                    className="h-full w-full select-none object-fill"
+                    draggable={false}
                   />
+                  <span
+                    className="absolute left-[7.3%] top-[7.4%] w-[10.5%] -translate-x-1/2 -translate-y-1/2 select-none cursor-default"
+                    onClick={unlock.onClick}
+                  >
+                    <img src="/LogoCoins.png" alt="PPE Logo" className="w-full" draggable={false} />
+                  </span>
+                  {/* Solo se muestran avisos (p. ej. sin conexion), no el mensaje normal */}
+                  {statusMessage !== 'Escanee su QR para iniciar el pago' && (
+                    <p className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-[#0b2a5b]/90 px-6 py-2 text-xl font-semibold text-white shadow-lg">
+                      {statusMessage}
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -3806,7 +3823,8 @@ export default function App() {
           </div>
         )
       }
-      {rootMode !== 'admin-dashboard' && (
+      {/* En la pantalla de inicio el logo va dentro de la imagen (mismos toques) */}
+      {rootMode !== 'admin-dashboard' && !(rootMode === 'payment' && paymentStage === 'idle') && (
         <span
           className="fixed top-4 left-4 z-40 select-none cursor-default"
           onClick={unlock.onClick}
