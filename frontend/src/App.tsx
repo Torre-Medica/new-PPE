@@ -2730,13 +2730,16 @@ export default function App() {
               {paymentStage === 'idle' && (
                 // Pantalla de inicio a pantalla completa. Va debajo del logo fijo (z-40),
                 // que conserva los toques para abrir el panel; la imagen no trae logo propio.
-                <div className="fixed inset-0 z-30 bg-white">
+                <div className="fixed inset-0 z-30 flex items-center justify-center bg-white">
+                  {/* Caja con la proporcion de la imagen (1810x869): se ve completa y sin deformar
+                      en cualquier pantalla (el kiosco es 1024x768); el logo conserva su posicion en % */}
+                  <div className="relative" style={{ width: 'min(100vw, calc(100vh * 1810 / 869))', aspectRatio: '1810 / 869' }}>
                   {/* Imagen al 100% de la pantalla; el logo va en la esquina blanca
                       (posicion en % de la imagen 1810x869), con los mismos toques */}
                   <img
                     src="/pantalla-inicio.jpg"
                     alt="Acerque el QR de su tiquete al lector a 10 - 15 cm"
-                    className="h-full w-full select-none object-fill"
+                    className="h-full w-full select-none object-contain"
                     draggable={false}
                   />
                   <span
@@ -2745,6 +2748,7 @@ export default function App() {
                   >
                     <img src="/LogoCoins.png" alt="PPE Logo" className="w-full" draggable={false} />
                   </span>
+                  </div>
                   {/* Solo se muestran avisos (p. ej. sin conexion), no el mensaje normal */}
                   {statusMessage !== 'Escanee su QR para iniciar el pago' && (
                     <p className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-[#0b2a5b]/90 px-6 py-2 text-xl font-semibold text-white shadow-lg">
