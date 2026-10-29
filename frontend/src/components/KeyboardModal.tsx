@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type React from 'react';
 import { createPortal } from 'react-dom';
 
 export type KbType = 'text' | 'email' | 'numeric' | 'password';
@@ -105,10 +106,12 @@ interface KeyProps {
   label: string;
   wide?: boolean;
   accent?: 'primary' | 'danger' | 'active';
-  onClick: () => void;
+  onClick?: () => void;
+  // Eventos extra (ej. pulsacion larga del borrado)
+  pointerHandlers?: React.HTMLAttributes<HTMLButtonElement>;
 }
 
-function Key({ label, wide, accent, onClick }: KeyProps) {
+function Key({ label, wide, accent, onClick, pointerHandlers }: KeyProps) {
   const color =
     accent === 'primary' ? 'bg-brand-500 text-white border-brand-600 shadow-sm' :
     accent === 'danger'  ? 'bg-alert-50 text-alert-600 border-alert-200' :
@@ -118,9 +121,117 @@ function Key({ label, wide, accent, onClick }: KeyProps) {
     <button
       className={`rounded-2xl border py-5 [@media(max-height:820px)]:py-3 text-2xl font-semibold transition-all active:scale-95 select-none ${color} ${wide ? 'flex-[3]' : 'flex-1'} min-w-0`}
       onClick={onClick}
+      {...pointerHandlers}
     >
       {label}
     </button>
+  );
+}
+
+// Borrar todo el campo: sostener el borrado este tiempo, o tocarlo mas de
+// CLEAR_ALL_TAPS veces seguidas (cada toque a menos de CLEAR_ALL_TAP_GAP_MS del anterior)
+const CLEAR_ALL_HOLD_MS = 2000;
+const CLEAR_ALL_TAPS = 5;
+const CLEAR_ALL_TAP_GAP_MS = 700;
+
+// Borrar: un toque borra un caracter; sostenido o con toques seguidos borra todo.
+// Usa pointer events (no onClick) para medir cuanto se mantiene presionado.
+function useHoldToClear(onDelete: () => void, onClearAll: () => void) {
+  const timer = useRef<number | null>(null);
+  const taps = useRef({ count: 0, at: 0 });
+  const stop = () => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+  };
+  useEffect(() => stop, []);
+  return {
+    onPointerDown: (event: React.PointerEvent) => {
+      event.preventDefault();
+      stop();
+      const now = Date.now();
+      taps.current = {
+        count: now - taps.current.at <= CLEAR_ALL_TAP_GAP_MS ? taps.current.count + 1 : 1,
+        at: now,
+      };
+      if (taps.current.count > CLEAR_ALL_TAPS) {
+        taps.current = { count: 0, at: 0 };
+        onClearAll();
+        return;
+      }
+      onDelete();
+      timer.current = window.setTimeout(() => {
+        timer.current = null;
+        onClearAll();
+      }, CLEAR_ALL_HOLD_MS);
+    },
+    onPointerUp: stop,
+    onPointerLeave: stop,
+    onPointerCancel: stop,
+    onContextMenu: (event: React.MouseEvent) => event.preventDefault(),
+  };
+}
+
+// Texto del campo con el cursor: tocar un caracter mueve el cursor a ese punto
+function CaretText({
+  shown,
+  caret,
+  onMove,
+  className,
+}: {
+  shown: string;
+  caret: number;
+  onMove: (position: number) => void;
+  className: string;
+}) {
+  const caretRef = useRef<HTMLSpanElement>(null);
+  // Con texto largo, el campo se desplaza para que el cursor siempre se vea
+  useEffect(() => {
+    caretRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [caret, shown]);
+  const chars = Array.from(shown);
+  const cursor = (
+    <span
+      ref={caretRef}
+      className="mx-[1px] inline-block h-[1.1em] w-[3px] translate-y-[0.15em] animate-pulse rounded-full bg-brand-500"
+      aria-hidden
+    />
+  );
+  return (
+    <span
+      className={`flex min-w-0 flex-1 cursor-text items-center overflow-x-auto whitespace-pre [scrollbar-width:none] ${className}`}
+      onPointerDown={(event) => {
+        // Toque en el espacio libre (a la derecha del texto): cursor al final
+        if (event.target === event.currentTarget) onMove(chars.length);
+      }}
+    >
+      {chars.map((ch, index) => (
+        <span key={index} className="contents">
+          {index === caret && cursor}
+          <span
+            onPointerDown={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              // Mitad izquierda del caracter: antes; mitad derecha: despues
+              onMove(event.clientX < rect.left + rect.width / 2 ? index : index + 1);
+            }}
+          >
+            {ch}
+          </span>
+        </span>
+      ))}
+      {caret >= chars.length && cursor}
+    </span>
+  );
+}
+
+function CaretArrows({ onLeft, onRight }: { onLeft: () => void; onRight: () => void }) {
+  const arrow = 'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-black/10 bg-white text-xl text-ink active:scale-95 select-none';
+  return (
+    <span className="flex shrink-0 gap-2">
+      <button type="button" className={arrow} aria-label="Mover cursor a la izquierda" onClick={onLeft}>◀</button>
+      <button type="button" className={arrow} aria-label="Mover cursor a la derecha" onClick={onRight}>▶</button>
+    </span>
   );
 }
 
@@ -144,7 +255,13 @@ export function KeyboardModal({
   onAccept,
   onCancel,
 }: Props) {
-  const [value, setValue] = useState(uppercase ? initialValue.toUpperCase() : initialValue);
+  // Valor y posicion del cursor juntos, para editar en el punto donde esta el cursor
+  const [text, setText] = useState(() => {
+    const start = uppercase ? initialValue.toUpperCase() : initialValue;
+    return { value: start, caret: start.length };
+  });
+  const value = text.value;
+  const caret = Math.min(text.caret, value.length);
   const [shift, setShift] = useState(false);
   const [symMode, setSymMode] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -238,11 +355,28 @@ export function KeyboardModal({
     onAccept(value);
   };
 
+  const insert = (chunk: string) =>
+    setText(t => {
+      const at = Math.min(t.caret, t.value.length);
+      return { value: t.value.slice(0, at) + chunk + t.value.slice(at), caret: at + chunk.length };
+    });
   const append = (ch: string) => {
-    setValue(v => v + (uppercase || (shift && !symMode) ? ch.toUpperCase() : ch));
+    insert(uppercase || (shift && !symMode) ? ch.toUpperCase() : ch);
     if (shift) setShift(false);
   };
-  const backspace = () => setValue(v => v.slice(0, -1));
+  // Borra el caracter a la izquierda del cursor
+  const backspace = () =>
+    setText(t => {
+      const at = Math.min(t.caret, t.value.length);
+      if (at === 0) return t;
+      return { value: t.value.slice(0, at - 1) + t.value.slice(at), caret: at - 1 };
+    });
+  const clearAll = () => setText({ value: '', caret: 0 });
+  const moveCaret = (position: number) =>
+    setText(t => ({ ...t, caret: Math.max(0, Math.min(position, t.value.length)) }));
+  const moveCaretBy = (delta: number) =>
+    setText(t => ({ ...t, caret: Math.max(0, Math.min(Math.min(t.caret, t.value.length) + delta, t.value.length)) }));
+  const holdToClear = useHoldToClear(backspace, clearAll);
 
   const display = type === 'password' && !showPassword ? '•'.repeat(value.length) : value;
 
@@ -252,12 +386,16 @@ export function KeyboardModal({
       resetIdle();
       if (e.key === 'Enter') { submit(); return; }
       if (e.key === 'Escape') { onCancel(); return; }
-      if (e.key === 'Backspace') { setValue(v => v.slice(0, -1)); return; }
+      if (e.key === 'Backspace') { backspace(); return; }
+      if (e.key === 'ArrowLeft') { moveCaretBy(-1); return; }
+      if (e.key === 'ArrowRight') { moveCaretBy(1); return; }
+      if (e.key === 'Home') { moveCaret(0); return; }
+      if (e.key === 'End') { moveCaret(Number.MAX_SAFE_INTEGER); return; }
       if (type === 'numeric') {
-        if (e.key >= '0' && e.key <= '9') setValue(v => v + e.key);
+        if (e.key >= '0' && e.key <= '9') insert(e.key);
         return;
       }
-      if (e.key.length === 1) setValue(v => v + (uppercase ? e.key.toUpperCase() : e.key));
+      if (e.key.length === 1) insert(uppercase ? e.key.toUpperCase() : e.key);
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
@@ -271,21 +409,25 @@ export function KeyboardModal({
         <div ref={dockedPanelRef} className="mb-4 w-64 rounded-4xl border border-white/20 p-5 shadow-kiosk" style={PANEL_STYLE}>
           <p className="mb-2 text-xs uppercase tracking-[0.18em] text-muted">{label}</p>
           <div className="mb-4 flex min-h-[3rem] items-center justify-center rounded-2xl border border-black/10 bg-white/80 px-4 py-2 text-2xl font-semibold text-ink">
-            {value || <span className="text-lg text-muted/40">—</span>}
+            {value ? (
+              <CaretText shown={value} caret={caret} onMove={moveCaret} className="justify-center" />
+            ) : (
+              <span className="text-lg text-muted/40">—</span>
+            )}
           </div>
           <div className="mb-4 grid grid-cols-3 gap-2">
             {numKeys.map(k => (
               <button
                 key={k}
+                {...(k === '⌫' ? holdToClear : {})}
                 className={`rounded-xl border py-4 text-lg font-semibold transition-all active:scale-95 select-none ${
                   k === 'C'  ? 'bg-alert-50 text-alert-600 border-alert-200' :
                   k === '⌫' ? 'bg-white/70 text-muted border-black/10' :
                   'bg-white/80 text-ink border-black/10'
                 }`}
                 onClick={() => {
-                  if (k === 'C') setValue('');
-                  else if (k === '⌫') backspace();
-                  else append(k);
+                  if (k === 'C') clearAll();
+                  else if (k !== '⌫') append(k);
                 }}
               >{k}</button>
             ))}
@@ -327,7 +469,7 @@ export function KeyboardModal({
               <Key label="@" onClick={() => append('@')} />
               <Key label="espacio" wide onClick={() => append(' ')} />
               <Key label={symMode ? 'ABC' : '#+='} onClick={() => { setSymMode(m => !m); setShift(false); }} />
-              <Key label="⌫" onClick={backspace} />
+              <Key label="⌫" pointerHandlers={holdToClear} />
             </div>
           </div>
           {/* Teclado numerico */}
@@ -413,9 +555,12 @@ export function KeyboardModal({
               error ? 'border-alert-500' : 'border-brand-500'
             }`}
           >
-            <span className="min-w-0 flex-1 truncate text-4xl font-semibold [@media(max-height:820px)]:text-3xl text-ink">
-              {display ? display : <span className="font-normal text-slate-400">{placeholder ?? '...'}</span>}
-            </span>
+            {display ? (
+              <CaretText shown={display} caret={caret} onMove={moveCaret} className="text-4xl font-semibold [@media(max-height:820px)]:text-3xl text-ink" />
+            ) : (
+              <span className="min-w-0 flex-1 truncate text-4xl font-normal [@media(max-height:820px)]:text-3xl text-slate-400">{placeholder ?? '...'}</span>
+            )}
+            {display && <CaretArrows onLeft={() => moveCaretBy(-1)} onRight={() => moveCaretBy(1)} />}
             {error && (
               <span className="max-w-[55%] shrink-0 text-right text-lg font-semibold leading-tight text-alert-600">
                 {error}
@@ -447,9 +592,12 @@ export function KeyboardModal({
           <p className="mb-2 text-sm uppercase tracking-[0.18em] text-muted">{label}</p>
         )}
         <div className="mb-4 flex min-h-[4rem] items-center rounded-2xl border border-black/10 bg-white/80 px-5 py-3 gap-3">
-          <span className="flex-1 truncate text-3xl font-semibold text-ink">
-            {display ? display : <span className="text-2xl font-normal text-muted/40">{placeholder ?? '...'}</span>}
-          </span>
+          {display ? (
+            <CaretText shown={display} caret={caret} onMove={moveCaret} className="text-3xl font-semibold text-ink" />
+          ) : (
+            <span className="flex-1 truncate text-2xl font-normal text-muted/40">{placeholder ?? '...'}</span>
+          )}
+          {display && <CaretArrows onLeft={() => moveCaretBy(-1)} onRight={() => moveCaretBy(1)} />}
           {passwordToggle}
         </div>
         {errorMessage}

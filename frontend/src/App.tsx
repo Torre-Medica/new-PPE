@@ -94,6 +94,9 @@ import type {
 const currency = new Intl.NumberFormat('es-CO');
 const BOGOTA_TIME_ZONE = 'America/Bogota';
 const ADMIN_SESSION_KEY = 'ppe-admin-session';
+// Cookie con los correos que lograron iniciar sesion en el panel (mas reciente primero)
+const ADMIN_EMAILS_COOKIE = 'ppe_admin_emails';
+const ADMIN_EMAILS_MAX = 5;
 const SERVER_LINK_DISCONNECTED_BY = 'server-link-disconnected';
 const SERVER_LINK_MAINTENANCE_REASON = 'Sin conexion con nexo_back';
 // El backend manda kiosk.heartbeat cada 10 s por el SSE.
@@ -385,6 +388,7 @@ export default function App() {
 
   const [adminSession, setAdminSession] = useState<AdminSession | null>(null);
   const [adminEmail, setAdminEmail] = useState('');
+  const [rememberedEmails, setRememberedEmails] = useState<string[]>(() => readRememberedAdminEmails());
   const [adminPassword, setAdminPassword] = useState('');
   const [adminLoginLoading, setAdminLoginLoading] = useState(false);
   const [adminLoginError, setAdminLoginError] = useState('');
@@ -2165,6 +2169,7 @@ export default function App() {
       const response = await loginAdmin(email, password);
       const nextSession: AdminSession = { accessToken: response.accessToken, email };
       persistAdminSession(nextSession);
+      setRememberedEmails(rememberAdminEmail(email));
       setAdminSession(nextSession);
       setAdminPassword('');
       setRootMode('admin-dashboard');
@@ -2174,6 +2179,34 @@ export default function App() {
       setAdminLoginLoading(false);
     }
   };
+
+  // Teclado de la contrasena para el correo elegido (Entrar inicia sesion)
+  const askAdminPassword = (email: string) => {
+    setAdminEmail(email);
+    setAdminLoginError('');
+    setKeyboardModal({
+      label: 'Contrasena',
+      initialValue: '',
+      type: 'password',
+      onChange: setAdminPassword,
+      acceptLabel: 'Entrar',
+      onAccept: (password) => {
+        setAdminPassword(password);
+        setKeyboardModal(null);
+        void doAdminLogin(email, password);
+      },
+    });
+  };
+
+  // Correos guardados que coinciden con lo que se va escribiendo (por el inicio
+  // del correo o del dominio); solo mientras el teclado del correo esta abierto
+  const typedAdminEmail = adminEmail.trim().toLowerCase();
+  const adminEmailMatches =
+    keyboardModal?.label === 'Correo' && typedAdminEmail
+      ? rememberedEmails
+          .filter((item) => item !== typedAdminEmail && (item.startsWith(typedAdminEmail) || (item.split('@')[1] ?? '').startsWith(typedAdminEmail)))
+          .slice(0, 5)
+      : [];
 
   const handleAdminLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -3205,7 +3238,7 @@ export default function App() {
             </h2>
 
             <form className="mt-5 space-y-3" onSubmit={(event) => void handleAdminLogin(event)}>
-              <label className="block">
+              <label className="relative block">
                 <span className="mb-2 block text-sm font-medium text-muted">Correo</span>
                 <input
                   className="touch-input cursor-pointer"
@@ -3218,23 +3251,30 @@ export default function App() {
                     initialValue: adminEmail,
                     type: 'email',
                     onChange: setAdminEmail,
-                    onAccept: (email) => {
-                      setAdminEmail(email);
-                      setKeyboardModal({
-                        label: 'Contrasena',
-                        initialValue: adminPassword,
-                        type: 'password',
-                        onChange: setAdminPassword,
-                        acceptLabel: 'Entrar',
-                        onAccept: (password) => {
-                          setAdminPassword(password);
-                          setKeyboardModal(null);
-                          void doAdminLogin(email, password);
-                        },
-                      });
-                    },
+                    onAccept: askAdminPassword,
                   })}
                 />
+                {/* Correos que ya iniciaron sesion (cookie), segun lo escrito: desplegable sobre el
+                    formulario (no lo mueve). data-keyboard-panel: tocarlos no cierra el teclado */}
+                {adminEmailMatches.length > 0 && (
+                  <ul className="absolute inset-x-0 top-full z-20 mt-1 overflow-hidden rounded-2xl border border-black/10 bg-white shadow-lg" data-keyboard-panel>
+                    {adminEmailMatches.map((email) => (
+                      <li key={email} className="border-b border-black/5 last:border-b-0">
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-3 px-5 py-3 text-left text-lg font-medium text-ink active:bg-brand-50"
+                          onClick={() => askAdminPassword(email)}
+                        >
+                          <svg className="h-5 w-5 shrink-0 text-brand-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                            <circle cx="12" cy="8" r="4" />
+                            <path d="M4 21a8 8 0 0 1 16 0" />
+                          </svg>
+                          <span className="truncate">{email}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </label>
 
               <label className="block">
@@ -3987,6 +4027,39 @@ function readStoredAdminSession(): AdminSession | null {
   } catch {
     return null;
   }
+}
+
+function readRememberedAdminEmails(): string[] {
+  if (typeof document === 'undefined') {
+    return [];
+  }
+
+  try {
+    const entry = document.cookie.split('; ').find((part) => part.startsWith(`${ADMIN_EMAILS_COOKIE}=`));
+    if (!entry) {
+      return [];
+    }
+
+    const parsed: unknown = JSON.parse(decodeURIComponent(entry.slice(ADMIN_EMAILS_COOKIE.length + 1)));
+    return Array.isArray(parsed)
+      ? parsed.filter((email): email is string => typeof email === 'string' && email.includes('@')).slice(0, ADMIN_EMAILS_MAX)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeRememberedAdminEmails(emails: string[]) {
+  const value = encodeURIComponent(JSON.stringify(emails));
+  document.cookie = `${ADMIN_EMAILS_COOKIE}=${value}; max-age=${60 * 60 * 24 * 365}; path=/; SameSite=Strict`;
+}
+
+// Guarda el correo (normalizado) al inicio de la lista y devuelve la lista nueva
+function rememberAdminEmail(email: string): string[] {
+  const normalized = email.trim().toLowerCase();
+  const emails = [normalized, ...readRememberedAdminEmails().filter((item) => item !== normalized)].slice(0, ADMIN_EMAILS_MAX);
+  writeRememberedAdminEmails(emails);
+  return emails;
 }
 
 function persistAdminSession(session: AdminSession) {
