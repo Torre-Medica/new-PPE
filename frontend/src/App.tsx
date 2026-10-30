@@ -139,6 +139,9 @@ const VALLE_ABURRA_CITY_INDEX = new Map(
   VALLE_ABURRA_CITY_ORDER.map((city, index) => [city, index]),
 );
 
+// Segundos para continuar solo con el pago si nadie toca "Continuar con el pago"
+const AUTO_CONTINUE_SECONDS = 6;
+
 const formatReviewCountdown = (seconds: number) => {
   if (seconds >= 60) {
     return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} min`;
@@ -1256,6 +1259,41 @@ export default function App() {
   const monthlySubscriptionValidated =
     !isMonthlyPayment ||
     (monthlySubscription?.validated === true && paymentDetails.amountDue > 0);
+  // "Continuar con el pago" automatico: cuenta AUTO_CONTINUE_SECONDS en la revision y
+  // luego hace lo mismo que tocar el boton. Una sola vez por sesion (si el cliente
+  // vuelve a la revision, p. ej. cancelando la placa, ya no se dispara solo) y
+  // cualquier toque en la tarjeta reinicia la cuenta.
+  const payButtonRef = useRef<HTMLButtonElement>(null);
+  const autoContinuedSessionRef = useRef<string | null>(null);
+  const [autoContinueSeconds, setAutoContinueSeconds] = useState(AUTO_CONTINUE_SECONDS);
+  const autoContinueActive =
+    paymentStage === 'review' &&
+    !paymentLoading &&
+    !billingLoading &&
+    !showBillingChoiceScreen &&
+    !showBillingDetailsScreen &&
+    !keyboardModal &&
+    monthlySubscriptionValidated &&
+    !!paymentDetails.paymentSessionId &&
+    autoContinuedSessionRef.current !== paymentDetails.paymentSessionId;
+
+  useEffect(() => {
+    if (!autoContinueActive) return;
+    setAutoContinueSeconds(AUTO_CONTINUE_SECONDS);
+    const timer = window.setInterval(() => {
+      setAutoContinueSeconds((s) => (s > 0 ? s - 1 : 0));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [autoContinueActive]);
+
+  useEffect(() => {
+    if (!autoContinueActive || autoContinueSeconds > 0) return;
+    const button = payButtonRef.current;
+    if (!button || button.disabled) return;
+    autoContinuedSessionRef.current = paymentDetails.paymentSessionId ?? null;
+    button.click();
+  }, [autoContinueActive, autoContinueSeconds, paymentDetails.paymentSessionId]);
+
   const monthlyForecastedEndDate =
     monthlySubscription?.validationDetail?.requestedMonthlySubscriptionEndDatetime
       ? formatBackendDate(
@@ -2805,7 +2843,10 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="rounded-3xl border border-black/5 bg-white/90 px-6 py-5 shadow-[0_8px_30px_rgba(11,42,91,0.08)]">
+                  <div
+                    className="rounded-3xl border border-black/5 bg-white/90 px-6 py-5 shadow-[0_8px_30px_rgba(11,42,91,0.08)]"
+                    onPointerDownCapture={() => setAutoContinueSeconds(AUTO_CONTINUE_SECONDS)}
+                  >
                     {isMonthlyPayment ? (
                       <div className="grid gap-4 md:grid-cols-3">
                         <ReviewInfo icon={<ClockIcon />} label="Placa" value={monthlySubscription?.plate || monthlyPlate || '-'} />
@@ -2881,9 +2922,12 @@ export default function App() {
 
                   <div className="mt-5 flex items-center gap-8 px-6">
                     <button
+                      ref={payButtonRef}
                       type="button"
                       className="cta-attention flex min-h-[4.5rem] flex-[2] items-center justify-center gap-5 rounded-full border-[3px] border-[#ff8a1f] bg-gradient-to-b from-[#1e4fb3] to-[#0b2f86] px-8 text-3xl font-bold text-white transition active:scale-[0.98] disabled:opacity-50"
                           onClick={() => {
+                            // Tocado (o automatico): no se vuelve a disparar solo en esta sesion
+                            autoContinuedSessionRef.current = paymentDetails.paymentSessionId ?? null;
                             // Factura a nombre: primero cedula/NIT (3) y confirmacion o registro (4A/4B)
                             if (
                               electronicBillingEnabled &&
@@ -2909,6 +2953,12 @@ export default function App() {
                         </svg>
                       </span>
                       Continuar con el pago
+                      {autoContinueActive && (
+                        // Cuenta para continuar solo
+                        <span className="flex h-11 min-w-[2.75rem] items-center justify-center rounded-full border-2 border-white/70 bg-white/15 px-2 text-2xl font-extrabold tabular-nums">
+                          {autoContinueSeconds}
+                        </span>
+                      )}
                     </button>
                     <button
                       type="button"
