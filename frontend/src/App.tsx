@@ -2787,110 +2787,140 @@ export default function App() {
 
               {!paymentLoading && paymentStage === 'review' && (
                 <div className="glass-panel">
-                  <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-                    <div></div>
-                    <div className="rounded-full bg-white/70 px-4 py-1.5 text-sm font-medium text-muted">
-                      {reviewCountdownSeconds > 0 ? `Cancelacion en: ${formatReviewCountdown(reviewCountdownSeconds)}` : 'Cancelando...'}
+                  {/* Cuenta regresiva de la revision */}
+                  <div className="mb-3 flex justify-end">
+                    <div className="flex items-center gap-1.5 rounded-full border border-black/5 bg-white px-4 py-1.5 text-sm text-slate-600 shadow-sm">
+                      <HourglassIcon className="h-4 w-4 text-[#0b3a8c]" />
+                      {reviewCountdownSeconds > 0 ? (
+                        <>
+                          Cancelación en:{' '}
+                          <b className="font-bold text-[#0b1f4d]">
+                            {formatReviewCountdown(reviewCountdownSeconds).replace(/ (min|s)$/, '')}
+                          </b>
+                          <span className="text-xs font-semibold text-ink">{reviewCountdownSeconds >= 60 ? 'min' : 's'}</span>
+                        </>
+                      ) : (
+                        'Cancelando...'
+                      )}
                     </div>
                   </div>
-                  {isMonthlyPayment ? (
-                    <div className="grid gap-3 md:grid-cols-3">
-                      <ReadOnlyField label="Placa" value={monthlySubscription?.plate || monthlyPlate || '-'} />
-                      <ReadOnlyField label="Monto a cobrar" value={`$ ${currency.format(paymentDetails.amountDue)}`} />
-                      <ReadOnlyField label="Fecha fin pronosticada" value={monthlyForecastedEndDate} />
-                    </div>
-                  ) : (
-                    <div className="grid gap-3 md:grid-cols-2">
-                      {showPaymentIdentifier && (
-                        <ReadOnlyField label={paymentDetails.identifierLabel} value={paymentDetails.identifierValue} />
-                      )}
-                      <ReadOnlyField label="Hora de entrada" value={paymentDetails.enteredAt} />
-                      <ReadOnlyField label="Monto adeudado" value={`$ ${currency.format(paymentDetails.amountDue)}`} />
-                    </div>
-                  )}
-                  {FIXED_PAYMENT_WARNINGS.length > 0 && (
-                    <div className="mt-4 grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
-                      <div className="rounded-[1.75rem] border border-alert-200 bg-alert-50 p-4">
-                        <p className="text-sm uppercase tracking-[0.2em] text-alert-600">Antes de pagar</p>
-                        <div className="mt-2 space-y-1 text-sm leading-relaxed text-alert-600">
-                          {FIXED_PAYMENT_WARNINGS.map((warning) => (
-                            <p key={warning}>{warning}</p>
-                          ))}
+
+                  <div className="rounded-3xl border border-black/5 bg-white/90 px-6 py-5 shadow-[0_8px_30px_rgba(11,42,91,0.08)]">
+                    {isMonthlyPayment ? (
+                      <div className="grid gap-4 md:grid-cols-3">
+                        <ReviewInfo icon={<ClockIcon />} label="Placa" value={monthlySubscription?.plate || monthlyPlate || '-'} />
+                        <ReviewInfo icon={<CoinsIcon />} label="Monto a pagar" value={`$ ${currency.format(paymentDetails.amountDue)}`} big />
+                        <ReviewInfo icon={<ClockIcon />} label="Fecha fin pronosticada" value={monthlyForecastedEndDate} />
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-4 md:flex-row md:items-center">
+                        <ReviewInfo icon={<ClockIcon />} label="Fecha y hora de ingreso" value={paymentDetails.enteredAt} />
+                        <span className="hidden h-12 w-px bg-slate-300 md:block" aria-hidden />
+                        <ReviewInfo icon={<CoinsIcon />} label="Monto a pagar" value={`$ ${currency.format(paymentDetails.amountDue)}`} big />
+                      </div>
+                    )}
+                    {showPaymentIdentifier && !isMonthlyPayment && (
+                      <p className="mt-2 text-sm text-slate-500">
+                        {paymentDetails.identifierLabel}: <b className="text-ink">{paymentDetails.identifierValue}</b>
+                      </p>
+                    )}
+
+                    {electronicBillingEnabled && !isMonthlyPayment && (
+                      // A nombre de quien va la factura (dentro de la misma tarjeta)
+                      <div className="mt-4 border-t border-slate-200 pt-4">
+                        <p className="mb-4 flex items-center justify-center gap-3 text-xl font-bold text-[#0b1f4d]">
+                          <PersonIcon className="h-8 w-8 text-[#1d4fb8]" />
+                          ¿A nombre de quién va la factura?
+                        </p>
+                        <div className="grid gap-4 md:grid-cols-2">
+                          {[
+                            { requested: false, title: 'Consumidor final', detail: '(sin datos)', icon: <PersonIcon className="h-14 w-14 text-[#1d4fb8]" /> },
+                            {
+                              requested: true,
+                              title: 'A mi nombre o empresa',
+                              detail:
+                                electronicBillingRequested && billingCustomer?.exist
+                                  ? maskName(customerDisplayName(billingCustomer.data))
+                                  : '(Cédula o NIT)',
+                              icon: <BuildingIcon className="h-14 w-14 text-[#1d4fb8]" />,
+                            },
+                          ].map((option) => {
+                            const selected = electronicBillingRequested === option.requested;
+                            return (
+                              <button
+                                key={option.title}
+                                type="button"
+                                onClick={() => chooseBillingRecipient(option.requested)}
+                                className={`flex items-center gap-6 rounded-2xl border-2 px-8 py-4 text-left transition-colors ${
+                                  selected ? 'border-[#2f6fe0] bg-[#e3eefc]' : 'border-slate-200 bg-white'
+                                }`}
+                              >
+                                <span className="shrink-0">{option.icon}</span>
+                                <span>
+                                  <span className="block text-xl font-bold text-[#0b1f4d]">{option.title}</span>
+                                  <span className="block text-base text-slate-500">{option.detail}</span>
+                                </span>
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
-                    </div>
-                  )}
-                  {electronicBillingEnabled && !isMonthlyPayment && (
-                    // Pantalla 2: a nombre de quien va la factura
-                    <div className="mt-4">
-                      <p className="mb-2 text-lg font-semibold text-ink">¿A nombre de quién va la factura?</p>
-                      <div className="grid gap-3 md:grid-cols-2">
-                        {[
-                          { requested: false, title: 'Consumidor final', detail: '(sin datos)', icon: '👤' },
-                          {
-                            requested: true,
-                            title: 'A mi nombre o empresa',
-                            detail:
-                              electronicBillingRequested && billingCustomer?.exist
-                                ? maskName(customerDisplayName(billingCustomer.data))
-                                : 'Cédula o NIT',
-                            icon: '🏢',
-                          },
-                        ].map((option) => {
-                          const selected = electronicBillingRequested === option.requested;
-                          return (
-                            <button
-                              key={option.title}
-                              type="button"
-                              onClick={() => chooseBillingRecipient(option.requested)}
-                              className={`flex items-center gap-4 rounded-2xl border-2 bg-white/80 px-5 py-4 text-left transition-colors ${
-                                selected ? 'border-brand-500 shadow-md' : 'border-black/10'
-                              }`}
-                            >
-                              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-brand-100 text-2xl">
-                                {option.icon}
-                              </span>
-                              <span>
-                                <span className="block text-lg font-semibold text-ink">{option.title}</span>
-                                <span className="block text-sm text-muted">{option.detail}</span>
-                              </span>
-                            </button>
-                          );
-                        })}
+                    )}
+                  </div>
+
+                  {FIXED_PAYMENT_WARNINGS.length > 0 && (
+                    <div className="mt-4 rounded-[1.75rem] border border-alert-200 bg-alert-50 p-4">
+                      <p className="text-sm uppercase tracking-[0.2em] text-alert-600">Antes de pagar</p>
+                      <div className="mt-2 space-y-1 text-sm leading-relaxed text-alert-600">
+                        {FIXED_PAYMENT_WARNINGS.map((warning) => (
+                          <p key={warning}>{warning}</p>
+                        ))}
                       </div>
                     </div>
                   )}
-                  <div className="mt-4 flex gap-3">
+
+                  <div className="mt-5 flex items-center gap-8 px-6">
                     <button
-                      className="touch-button-primary flex-1"
-                      onClick={() => {
-                        // Factura a nombre: primero cedula/NIT (3) y confirmacion o registro (4A/4B)
-                        if (
-                          electronicBillingEnabled &&
-                          electronicBillingRequested &&
-                          !isMonthlyPayment &&
-                          !billingCustomer?.exist
-                        ) {
-                          startBillingFlow();
-                          return;
-                        }
-                        openPlateEntry();
-                      }}
-                      disabled={
-                        (electronicBillingEnabled && showBillingDetailsScreen) ||
-                        paymentLoading ||
-                        billingLoading ||
-                        !monthlySubscriptionValidated
-                      }
+                      type="button"
+                      className="cta-attention flex min-h-[4.5rem] flex-[2] items-center justify-center gap-5 rounded-full border-[3px] border-[#ff8a1f] bg-gradient-to-b from-[#1e4fb3] to-[#0b2f86] px-8 text-3xl font-bold text-white transition active:scale-[0.98] disabled:opacity-50"
+                          onClick={() => {
+                            // Factura a nombre: primero cedula/NIT (3) y confirmacion o registro (4A/4B)
+                            if (
+                              electronicBillingEnabled &&
+                              electronicBillingRequested &&
+                              !isMonthlyPayment &&
+                              !billingCustomer?.exist
+                            ) {
+                              startBillingFlow();
+                              return;
+                            }
+                            openPlateEntry();
+                          }}
+                          disabled={
+                            (electronicBillingEnabled && showBillingDetailsScreen) ||
+                            paymentLoading ||
+                            billingLoading ||
+                            !monthlySubscriptionValidated
+                          }
                     >
-                      Pagar
+                      <span className="cta-arrow flex h-12 w-12 items-center justify-center rounded-full bg-white text-[#0b2f86]" aria-hidden>
+                        <svg className="h-7 w-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M5 12h14M13 6l6 6-6 6" />
+                        </svg>
+                      </span>
+                      Continuar con el pago
                     </button>
                     <button
                       type="button"
-                      className="touch-button flex-1 bg-red-600 text-white shadow-md hover:bg-red-700 active:bg-red-800"
+                      className="flex min-h-[3.75rem] flex-1 items-center justify-center gap-3 rounded-full border-2 border-red-600 bg-white px-6 text-xl font-bold text-red-600 shadow-sm transition active:scale-[0.98] disabled:opacity-50"
                       onClick={handleCancelPayment}
                       disabled={paymentLoading}
                     >
+                      <span className="flex h-9 w-9 items-center justify-center rounded-full bg-red-600 text-white" aria-hidden>
+                        <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round">
+                          <path d="M7 7l10 10M17 7 7 17" />
+                        </svg>
+                      </span>
                       Cancelar
                     </button>
                   </div>
@@ -2957,10 +2987,11 @@ export default function App() {
                           )}
                         </div>
                       )}
-                      <span className="mb-1 inline-block text-xs uppercase tracking-[0.22em] text-brand-700">
+                      <span className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.22em] text-[#1d4fb8]">
+                        <span className="h-4 w-1 rounded-full bg-[#ff7a1a]" aria-hidden />
                         Recepcion de efectivo
                       </span>
-                      <h2 className="text-2xl font-semibold tracking-[-0.04em] md:text-3xl">
+                      <h2 className="text-2xl font-bold tracking-[-0.03em] text-[#0b1f4d] md:text-3xl">
                         Introduzca billetes o monedas
                       </h2>
                     </div>
@@ -2970,7 +3001,11 @@ export default function App() {
                           ID: {paymentDetails.identifierValue}
                         </div>
                       )}
-                      <div className="rounded-full bg-white/70 px-3 py-1.5 text-sm font-medium text-muted">
+                      <div className="flex items-center gap-2 rounded-full border border-black/5 bg-white/90 px-4 py-1.5 text-sm font-medium text-[#0b1f4d] shadow-sm">
+                        <svg className="h-5 w-5 text-[#1d4fb8]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
+                          <circle cx="12" cy="12" r="9" />
+                          <path d="M12 7v5l3 2" />
+                        </svg>
                         {collectingCountdownSeconds > 0
                           ? `Cancelacion en: ${collectingCountdownSeconds} s`
                           : paymentDetails.insertedAmount > 0
@@ -2982,13 +3017,16 @@ export default function App() {
                           dinero (ej. ticket de $0 en pruebas) siempre se puede cancelar. */}
                       <button
                         type="button"
-                        className="touch-button !min-h-[2.75rem] !px-5 text-sm bg-red-600 text-white shadow-md hover:bg-red-700 active:bg-red-800"
+                        className="flex min-h-[3rem] items-center gap-3 rounded-full bg-gradient-to-b from-[#e3283b] to-[#b8102a] px-7 text-lg font-semibold text-white shadow-[0_6px_16px_rgba(184,16,42,0.35)] transition active:scale-[0.98] disabled:opacity-50"
                         onClick={handleCancelPayment}
                         disabled={
                           (pendingAmount === 0 && paymentDetails.insertedAmount > 0) ||
                           collectingCountdownSeconds === 0
                         }
                       >
+                        <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden>
+                          <path d="M6 6l12 12M18 6 6 18" />
+                        </svg>
                         Cancelar
                       </button>
                     </div>
@@ -2996,15 +3034,17 @@ export default function App() {
 
                   <div className="grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
                     <div className="grid gap-3 md:grid-cols-2">
-                      <MetricCard
+                      <CashAmountCard
+                        icon={<CoinsIcon />}
                         title="Ingresado"
                         value={`$ ${currency.format(paymentDetails.insertedAmount)}`}
-                        accent="neutral"
+                        valueClassName="text-[#0b1f4d]"
                       />
-                      <MetricCard
+                      <CashAmountCard
+                        icon={<WalletIcon />}
                         title={pendingAmount > 0 ? 'Faltante' : 'Listo'}
                         value={`$ ${currency.format(pendingAmount > 0 ? pendingAmount : 0)}`}
-                        accent={pendingAmount > 0 ? 'danger' : 'success'}
+                        valueClassName={pendingAmount > 0 ? 'text-[#f0461f]' : 'text-emerald-600'}
                       />
                     </div>
                   </div>
@@ -4119,6 +4159,104 @@ function AccordionSection({
       </button>
       {isOpen && <div className="mt-2">{children}</div>}
     </div>
+  );
+}
+
+// Tarjeta de la recepcion de efectivo (Ingresado / Faltante)
+function CashAmountCard({ icon, title, value, valueClassName }: { icon: React.ReactNode; title: string; value: string; valueClassName: string }) {
+  return (
+    <div className="flex items-center gap-6 rounded-3xl border border-black/5 bg-white/90 px-6 py-4 shadow-[0_8px_24px_rgba(11,42,91,0.08)]">
+      <span className="shrink-0">{icon}</span>
+      <div className="min-w-0">
+        <p className="text-sm font-medium uppercase tracking-[0.08em] text-[#0b1f4d]">{title}</p>
+        <p className={`truncate text-4xl font-extrabold tracking-tight ${valueClassName}`}>{value}</p>
+      </div>
+    </div>
+  );
+}
+
+function WalletIcon() {
+  return (
+    <svg className="h-14 w-14" viewBox="0 0 48 48" aria-hidden>
+      <path d="M9 13.5 31 7a3 3 0 0 1 3.8 2.9V14H12z" fill="#2c64d6" />
+      <rect x="5" y="13" width="36" height="28" rx="5" fill="#1d4fb8" />
+      <rect x="29" y="21.5" width="15" height="11" rx="3.5" fill="#2c64d6" />
+      <circle cx="35" cy="27" r="2.2" fill="#fff" />
+    </svg>
+  );
+}
+
+// Dato de la pantalla de revision: icono, etiqueta gris y valor grande
+function ReviewInfo({ icon, label, value, big = false }: { icon: React.ReactNode; label: string; value: string; big?: boolean }) {
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-5">
+      <span className="shrink-0 text-[#0b3a8c]">{icon}</span>
+      <div className="min-w-0">
+        <p className="text-base text-slate-600">{label}</p>
+        <p className={`truncate font-bold tracking-tight text-[#0b1f4d] ${big ? 'text-5xl font-extrabold' : 'text-2xl'}`}>{value}</p>
+      </div>
+    </div>
+  );
+}
+
+function ClockIcon() {
+  return (
+    <svg className="h-12 w-12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
+      <circle cx="12" cy="12" r="9.5" />
+      <path d="M12 6.5V12l3.5 2" />
+    </svg>
+  );
+}
+
+function CoinsIcon() {
+  return (
+    <svg className="h-14 w-14" viewBox="0 0 48 48" aria-hidden>
+      <g fill="#1d4fb8" stroke="#fff" strokeWidth="1.5">
+        <ellipse cx="18" cy="34" rx="13" ry="5" />
+        <path d="M5 34v5c0 2.8 5.8 5 13 5s13-2.2 13-5v-5" />
+        <ellipse cx="18" cy="26" rx="13" ry="5" />
+        <path d="M5 26v8c0 2.8 5.8 5 13 5" />
+        <ellipse cx="18" cy="18" rx="13" ry="5" />
+        <path d="M5 18v8c0 2.8 5.8 5 13 5s13-2.2 13-5v-8" />
+        <ellipse cx="18" cy="10" rx="13" ry="5" />
+        <path d="M5 10v8c0 2.8 5.8 5 13 5s13-2.2 13-5v-8" />
+        <ellipse cx="34" cy="32" rx="11" ry="4.5" />
+        <path d="M23 32v6c0 2.5 4.9 4.5 11 4.5s11-2 11-4.5v-6" />
+      </g>
+    </svg>
+  );
+}
+
+function PersonIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <circle cx="12" cy="7.5" r="4.5" />
+      <path d="M3.5 21.5c0-4.7 3.8-8 8.5-8s8.5 3.3 8.5 8z" />
+    </svg>
+  );
+}
+
+function BuildingIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M3 21.5V5.5L12 2v19.5H3zm11 0V8l7 2.5v11h-7z" />
+      <g fill="#fff">
+        <rect x="5" y="7" width="1.8" height="1.8" /><rect x="8.2" y="7" width="1.8" height="1.8" />
+        <rect x="5" y="10.5" width="1.8" height="1.8" /><rect x="8.2" y="10.5" width="1.8" height="1.8" />
+        <rect x="5" y="14" width="1.8" height="1.8" /><rect x="8.2" y="14" width="1.8" height="1.8" />
+        <rect x="6.3" y="18" width="2.4" height="3.5" />
+        <rect x="16" y="12" width="1.6" height="1.6" /><rect x="18.4" y="12" width="1.6" height="1.6" />
+        <rect x="16" y="15.2" width="1.6" height="1.6" /><rect x="18.4" y="15.2" width="1.6" height="1.6" />
+      </g>
+    </svg>
+  );
+}
+
+function HourglassIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M6 2h12v2h-1v3.2a4 4 0 0 1-1.6 3.2L13.3 12l2.1 1.6A4 4 0 0 1 17 16.8V20h1v2H6v-2h1v-3.2a4 4 0 0 1 1.6-3.2l2.1-1.6-2.1-1.6A4 4 0 0 1 7 7.2V4H6z" />
+    </svg>
   );
 }
 
