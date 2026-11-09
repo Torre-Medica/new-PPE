@@ -1861,6 +1861,8 @@ export default function App() {
       phoneNumber: phone,
       vatResponsible: false,
       idCodeFiscalResponsabilities: responsibilities.length > 0 ? responsibilities : undefined,
+      // siigo_service exige un contacto para empresas y esta pantalla solo pide la razon social
+      contacts: personType === 'Company' ? [{ firstName: name.slice(0, 80), lastName: name.slice(0, 80) }] : undefined,
     };
 
     setBillingLoading(true);
