@@ -3083,7 +3083,7 @@ export default function App() {
                   </div>
 
                   <div className="grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
-                    <div className="grid gap-3 md:grid-cols-2">
+                    <div className="flex flex-col gap-3 md:flex-row">
                       <CashAmountCard
                         icon={<CoinsIcon />}
                         title="Ingresado"
@@ -4215,11 +4215,11 @@ function AccordionSection({
 // Tarjeta de la recepcion de efectivo (Ingresado / Faltante)
 function CashAmountCard({ icon, title, value, valueClassName }: { icon: React.ReactNode; title: string; value: string; valueClassName: string }) {
   return (
-    <div className="flex items-center gap-6 rounded-3xl border border-black/5 bg-white/90 px-6 py-4 shadow-[0_8px_24px_rgba(11,42,91,0.08)]">
+    <div className="flex flex-1 items-center gap-6 rounded-3xl border border-black/5 bg-white/90 px-6 py-4 shadow-[0_8px_24px_rgba(11,42,91,0.08)]">
       <span className="shrink-0">{icon}</span>
-      <div className="min-w-0">
+      <div>
         <p className="text-sm font-medium uppercase tracking-[0.08em] text-[#0b1f4d]">{title}</p>
-        <p className={`truncate text-4xl font-extrabold tracking-tight ${valueClassName}`}>{value}</p>
+        <p className={`whitespace-nowrap text-4xl font-extrabold tracking-tight ${valueClassName}`}>{value}</p>
       </div>
     </div>
   );
