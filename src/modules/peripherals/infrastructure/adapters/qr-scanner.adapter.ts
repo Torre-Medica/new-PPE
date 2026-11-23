@@ -194,6 +194,20 @@ export class QrScannerAdapter implements QrScannerPort {
       };
     }
 
+    // Cédula colombiana (PDF417 del respaldo): campos de ancho fijo separados
+    // por caracteres nulos ("0362475858<NUL>…PubDSK_1<NUL>…511872<NUL><NUL>1001004621RAMIREZ…").
+    // Se envía al servidor solo el número: 10 dígitos desde la posición 48.
+    if (cleaned.includes('PubDSK')) {
+      const fixed = cleaned.substring(48, 58);
+      const fallback = cleaned
+        .slice(cleaned.indexOf('PubDSK') + 8)
+        .match(/(\d{6,10})[A-ZÑ]{2,}/)?.[1];
+      const cedula = /^\d{10}$/.test(fixed) ? fixed : fallback ?? null;
+      return cedula
+        ? { valid: true, value: cedula }
+        : { valid: false, value: null, reason: 'No se pudo leer el numero de la cedula' };
+    }
+
     if (cleaned.includes(',')) {
       return {
         valid: true,
