@@ -10,6 +10,12 @@ export const ACTIVE_SESSION_STATUSES: PaymentSessionStatus[] = [
   PaymentSessionStatus.ReadyToCommit,
 ];
 
+/** Sesiones que un QR distinto puede reemplazar si aun no tienen dinero. */
+export const REPLACEABLE_SESSION_STATUSES: PaymentSessionStatus[] = [
+  PaymentSessionStatus.Validated,
+  PaymentSessionStatus.ListeningCash,
+];
+
 export const CASH_ACCEPTING_STATUSES: PaymentSessionStatus[] = [
   PaymentSessionStatus.ListeningCash,
 ];

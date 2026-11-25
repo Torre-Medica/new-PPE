@@ -941,6 +941,97 @@ describe('PaymentSessionService', () => {
     );
   });
 
+  describe('QR distinto con una sesion abierta', () => {
+    const scan = async (activeSession: PaymentSessionEntity, qrCode: string) => {
+      const ctx = createService();
+      let qrHandler: ((event: Record<string, unknown>) => Promise<void>) | undefined;
+      ctx.peripheralsService.onQrScanned.mockImplementation((handler: typeof qrHandler) => {
+        qrHandler = handler;
+      });
+      ctx.paymentSessionRepository.findOne.mockImplementation(
+        async ({ where }: { where: { id?: string } }) =>
+          // Sesion activa y lecturas por id de la sesion anterior
+          !where.id || where.id === activeSession.id ? activeSession : null,
+      );
+      ctx.paymentSessionRepository.save.mockImplementation(async (value) => ({
+        id: 'nueva',
+        ...value,
+      }));
+      ctx.serverLinkService.validatePaymentCandidate.mockResolvedValue({
+        status: 'ALREADY_PAID',
+        paidStatus: true,
+      });
+      ctx.service.onApplicationBootstrap();
+      await qrHandler?.({
+        source: 'QR_SCANNER',
+        qrCode,
+        rawCode: qrCode,
+        port: 'COM4',
+        scannedAt: '2026-11-25T15:00:00.000Z',
+      });
+      // El manejador corre con `void`: se deja avanzar la cadena de promesas
+      for (let i = 0; i < 20; i += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      return ctx;
+    };
+
+    it('cancela la sesion sin dinero y valida el nuevo QR', async () => {
+      const active = makeSession({
+        status: PaymentSessionStatus.ListeningCash,
+        insertedAmount: 0,
+      });
+      const { paymentSessionRepository, serverLinkService, kioskEventsService } = await scan(
+        active,
+        'qr-2',
+      );
+
+      expect(paymentSessionRepository.update).toHaveBeenCalledWith(
+        { id: 'session-1', status: PaymentSessionStatus.ListeningCash, insertedAmount: 0 },
+        expect.objectContaining({
+          status: PaymentSessionStatus.Canceled,
+          failureReason: 'Reemplazada por un nuevo QR',
+        }),
+      );
+      expect(serverLinkService.cancelPayment).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: 'Reemplazada por un nuevo QR en el PPE' }),
+      );
+      expect(kioskEventsService.emit).toHaveBeenCalledWith(
+        'session.canceled',
+        expect.objectContaining({ paymentSessionId: 'session-1' }),
+      );
+      expect(serverLinkService.validatePaymentCandidate).toHaveBeenCalledWith(
+        expect.objectContaining({ qrCode: 'qr-2' }),
+      );
+    });
+
+    it('con dinero ingresado conserva la sesion y descarta el nuevo QR', async () => {
+      const active = makeSession({
+        status: PaymentSessionStatus.ListeningCash,
+        insertedAmount: 2000,
+      });
+      const { paymentSessionRepository, serverLinkService, kioskEventsService } = await scan(
+        active,
+        'qr-2',
+      );
+
+      expect(paymentSessionRepository.update).not.toHaveBeenCalled();
+      expect(serverLinkService.validatePaymentCandidate).not.toHaveBeenCalled();
+      expect(kioskEventsService.emit).toHaveBeenCalledWith(
+        'qr.ignored',
+        expect.objectContaining({ qrCode: 'qr-2' }),
+      );
+    });
+
+    it('el mismo QR no reinicia la sesion', async () => {
+      const active = makeSession({ status: PaymentSessionStatus.Validated, insertedAmount: 0 });
+      const { paymentSessionRepository, serverLinkService } = await scan(active, 'qr-1');
+
+      expect(paymentSessionRepository.update).not.toHaveBeenCalled();
+      expect(serverLinkService.validatePaymentCandidate).not.toHaveBeenCalled();
+    });
+  });
+
   it('retries a pending server commit without dispensing change again', async () => {
     const {
       service,

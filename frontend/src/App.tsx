@@ -579,6 +579,9 @@ export default function App() {
       });
 
       eventSource.addEventListener('qr.processing', () => {
+        // Un QR nuevo reemplazo la sesion anterior: se cierra su teclado
+        // (placa/factura) para que no quede encima ni cancele la nueva.
+        setKeyboardModal(null);
         setGraceInfo(null);
         setPaymentStage('scanning');
         setStatusMessage('Validando lectura con el servidor...');
@@ -652,7 +655,7 @@ export default function App() {
           identifierLabel: asString(payload.identifierLabel) === 'Cedula' ? 'Cedula' : 'UUID',
           identifierValue: asString(payload.identifierValue),
           amountDue: asNumber(payload.targetAmount),
-          enteredAt: formatBackendDate(asString(payload.enteredAt)),
+          enteredAt: asString(payload.enteredAt),
           insertedAmount: 0,
           insertedItems: [],
           changeAmount: 0,
@@ -768,6 +771,7 @@ export default function App() {
           paymentLoadingTimerRef.current = null;
         }
         setPaymentLoading(false);
+        setKeyboardModal(null);
         setPaymentStage('idle');
         setPaymentDetails(demoPayment);
         resetBillingFlow();
@@ -1283,7 +1287,11 @@ export default function App() {
     const timer = window.setInterval(() => {
       setAutoContinueSeconds((s) => (s > 0 ? s - 1 : 0));
     }, 1000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      // Si no, la siguiente sesion arranca en 0 y se salta la revision
+      setAutoContinueSeconds(AUTO_CONTINUE_SECONDS);
+    };
   }, [autoContinueActive]);
 
   useEffect(() => {
@@ -1453,7 +1461,7 @@ export default function App() {
       identifierValue: session.identifierValue,
       sessionType: session.sessionType ?? (session.monthlySubscription ? 'MONTHLY_SUBSCRIPTION' : 'VISITOR'),
       amountDue: session.targetAmount,
-      enteredAt: formatBackendDate(session.enteredAt),
+      enteredAt: session.enteredAt ?? '',
       insertedAmount: session.insertedAmount,
       insertedItems: [],
       changeAmount: session.changeAmount,
@@ -2856,9 +2864,13 @@ export default function App() {
                         <ReviewInfo icon={<ClockIcon />} label="Fecha fin pronosticada" value={monthlyForecastedEndDate} />
                       </div>
                     ) : (
-                      <div className="flex flex-col gap-4 md:flex-row md:items-center">
-                        <ReviewInfo icon={<ClockIcon />} label="Fecha y hora de ingreso" value={paymentDetails.enteredAt} />
-                        <span className="hidden h-12 w-px bg-slate-300 md:block" aria-hidden />
+                      <div className="flex flex-col gap-4">
+                        {/* Tiquete que se esta pagando: placa y hora de ingreso */}
+                        <TicketBanner
+                          plate={paymentDetails.vehiclePlate ?? null}
+                          vehicleType={paymentDetails.vehicleType ?? null}
+                          enteredAt={paymentDetails.enteredAt}
+                        />
                         <ReviewInfo icon={<CoinsIcon />} label="Monto a pagar" value={`$ ${currency.format(paymentDetails.amountDue)}`} big />
                       </div>
                     )}
@@ -3083,6 +3095,17 @@ export default function App() {
                       </button>
                     </div>
                   </div>
+
+                  {!isMonthlyPayment && (
+                    <div className="mb-3">
+                      <TicketBanner
+                        plate={paymentDetails.vehiclePlate ?? null}
+                        vehicleType={paymentDetails.vehicleType ?? null}
+                        enteredAt={paymentDetails.enteredAt}
+                        compact
+                      />
+                    </div>
+                  )}
 
                   <div className="grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
                     <div className="flex flex-col gap-3 md:flex-row">
@@ -4239,6 +4262,94 @@ function WalletIcon() {
 }
 
 // Dato de la pantalla de revision: icono, etiqueta gris y valor grande
+function formatEntryPart(value: string, options: Intl.DateTimeFormatOptions): string {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) {
+    return '';
+  }
+  return new Intl.DateTimeFormat('es-CO', { timeZone: BOGOTA_TIME_ZONE, ...options }).format(date);
+}
+
+function formatElapsed(value: string): string {
+  const start = new Date(value).getTime();
+  if (!value || Number.isNaN(start)) {
+    return '';
+  }
+  const minutes = Math.max(0, Math.floor((Date.now() - start) / 60000));
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const rest = minutes % 60;
+  if (days > 0) return `Hace ${days} d ${hours} h`;
+  if (hours > 0) return `Hace ${hours} h ${rest} min`;
+  return `Hace ${rest} min`;
+}
+
+/** Franja con la placa y la hora de ingreso del tiquete que se esta pagando. */
+function TicketBanner({
+  plate,
+  vehicleType,
+  enteredAt,
+  compact = false,
+}: {
+  plate: string | null;
+  vehicleType: string | null;
+  enteredAt: string;
+  compact?: boolean;
+}) {
+  const time = formatEntryPart(enteredAt, { hour: '2-digit', minute: '2-digit', hour12: true });
+  const rawDate = formatEntryPart(enteredAt, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const date = rawDate.charAt(0).toUpperCase() + rawDate.slice(1);
+  const elapsed = formatElapsed(enteredAt);
+  const vehicleLabel = vehicleType === 'MOTO' ? 'Moto' : vehicleType === 'CARRO' ? 'Carro' : null;
+
+  return (
+    <div
+      className={`flex items-stretch overflow-hidden rounded-3xl border-2 border-[#0b2f86]/15 bg-gradient-to-r from-[#eef4ff] to-white shadow-[0_6px_20px_rgba(11,42,91,0.08)] ${
+        compact ? 'gap-4 px-5 py-3' : 'gap-6 px-6 py-5'
+      }`}
+    >
+      <div className="flex shrink-0 flex-col justify-center">
+        <p className={`font-semibold uppercase tracking-[0.18em] text-[#1d4fb8] ${compact ? 'text-xs' : 'text-sm'}`}>
+          Placa{vehicleLabel ? ` · ${vehicleLabel}` : ''}
+        </p>
+        {plate ? (
+          <span
+            className={`mt-1.5 inline-flex items-center justify-center rounded-xl border-[3px] border-[#111] bg-gradient-to-b from-[#ffd84a] to-[#f2b800] font-black tracking-[0.12em] text-[#111] shadow-[inset_0_-3px_0_rgba(0,0,0,0.15),0_4px_10px_rgba(0,0,0,0.18)] ${
+              compact ? 'px-4 py-1 text-3xl' : 'px-6 py-2 text-5xl'
+            }`}
+          >
+            {plate}
+          </span>
+        ) : (
+          <span className={`mt-1.5 font-bold text-slate-500 ${compact ? 'text-xl' : 'text-2xl'}`}>Sin placa registrada</span>
+        )}
+      </div>
+
+      <span className="w-px shrink-0 bg-[#0b2f86]/15" aria-hidden />
+
+      <div className="flex min-w-0 flex-1 items-center gap-4">
+        <span className="shrink-0 text-[#0b3a8c]">
+          <ClockIcon />
+        </span>
+        <div className="min-w-0">
+          <p className={`font-semibold uppercase tracking-[0.18em] text-[#1d4fb8] ${compact ? 'text-xs' : 'text-sm'}`}>
+            Hora de ingreso
+          </p>
+          <p className={`font-extrabold leading-tight tracking-tight text-[#0b1f4d] ${compact ? 'text-3xl' : 'text-5xl'}`}>
+            {time || enteredAt || '-'}
+          </p>
+          {date && (
+            <p className={`truncate text-slate-600 ${compact ? 'text-sm' : 'text-lg'}`}>
+              {date}
+              {elapsed && <span className="ml-2 font-semibold text-[#f0461f]">· {elapsed}</span>}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ReviewInfo({ icon, label, value, big = false }: { icon: React.ReactNode; label: string; value: string; big?: boolean }) {
   return (
     <div className="flex min-w-0 flex-1 items-center gap-5">

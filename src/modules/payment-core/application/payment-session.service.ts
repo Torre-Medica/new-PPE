@@ -22,6 +22,7 @@ import {
   ACTIVE_SESSION_STATUSES,
   CASH_ACCEPTING_STATUSES,
   COMPLETABLE_STATUSES,
+  REPLACEABLE_SESSION_STATUSES,
 } from '@modules/payment-core/domain/payment-session-states';
 import { ActivatePaymentCollectionDto } from '@modules/payment-core/application/dto/activate-payment-collection.dto';
 import { CompleteSessionDto } from '@modules/payment-core/application/dto/complete-session.dto';
@@ -858,7 +859,11 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
     });
   }
 
-  async cancelSession(sessionId: string) {
+  async cancelSession(
+    sessionId: string,
+    options: { reason?: string; serverReason?: string; requireNoCash?: boolean } = {},
+  ) {
+    const reason = options.reason ?? 'Cancelada manualmente';
     const session = await this.getSessionById(sessionId);
 
     if (!ACTIVE_SESSION_STATUSES.includes(session.status)) {
@@ -885,12 +890,24 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
     // cancelaciones casi simultaneas (doble-tap) llegan aqui, solo la primera
     // afecta una fila — la segunda ve affected=0 y no reintenta el reembolso,
     // evitando devolver el mismo efectivo dos veces.
+    // Al reemplazarla por otro QR solo se cancela si no ha entrado dinero; el
+    // UPDATE tambien lo exige por si un billete entra justo en ese momento.
+    if (options.requireNoCash && session.insertedAmount > 0) {
+      throw new PaymentSessionConflictError(
+        `La sesion ${sessionId} ya tiene dinero ingresado — no se reemplaza`,
+      );
+    }
+
     const result = await this.paymentSessionRepository.update(
-      { id: sessionId, status: session.status },
+      {
+        id: sessionId,
+        status: session.status,
+        ...(options.requireNoCash ? { insertedAmount: 0 } : {}),
+      },
       {
         status: PaymentSessionStatus.Canceled,
         completedAt: new Date(),
-        failureReason: 'Cancelada manualmente',
+        failureReason: reason,
       },
     );
 
@@ -912,7 +929,7 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       processId: session.serverProcessId,
       qrCode: session.qrCode,
       vehiclePlate: session.vehiclePlate,
-      reason: 'Cancelada manualmente desde PPE',
+      reason: options.serverReason ?? 'Cancelada manualmente desde PPE',
     };
 
     let cancelResponse: unknown = null;
@@ -939,13 +956,14 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
 
     await this.appendEvent(sessionId, 'payment.session.canceled', null, {
       previousStatus: session.status,
+      reason,
       cancelResponse,
     });
 
     this.kioskEventsService.emit('session.canceled', {
       paymentSessionId: session.id,
       qrCode: session.qrCode,
-      reason: 'Cancelada manualmente',
+      reason,
     });
 
     return this.getSessionById(sessionId);
@@ -1875,7 +1893,7 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
         },
       });
 
-      if (activeSession) {
+      if (activeSession && !(await this.replaceSessionWithoutCash(activeSession, event.qrCode))) {
         await this.appendEvent(activeSession.id, 'payment.qr.validation-rejected', null, {
           qrCode: event.qrCode,
           reason: `Ya existe una sesion activa (${activeSession.id}) en estado ${activeSession.status}`,
@@ -2075,6 +2093,45 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
     } finally {
       this.isProcessingQr = false;
     }
+  }
+
+  /**
+   * Un QR distinto mientras otra sesion espera (revision o recepcion de
+   * efectivo) sin dinero ingresado: la sesion anterior se cancela para que el
+   * nuevo QR abra la suya. Con dinero ingresado, o si es el mismo QR, se
+   * conserva la sesion actual.
+   */
+  private async replaceSessionWithoutCash(
+    activeSession: PaymentSessionEntity,
+    scannedCode: string,
+  ): Promise<boolean> {
+    const code = scannedCode.trim();
+    const sameCode = [activeSession.qrCode, activeSession.identificationCode].some(
+      (value) => (value ?? '').trim() === code,
+    );
+    if (
+      sameCode ||
+      activeSession.insertedAmount > 0 ||
+      !REPLACEABLE_SESSION_STATUSES.includes(activeSession.status)
+    ) {
+      return false;
+    }
+
+    try {
+      await this.cancelSession(activeSession.id, {
+        reason: 'Reemplazada por un nuevo QR',
+        serverReason: 'Reemplazada por un nuevo QR en el PPE',
+        requireNoCash: true,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `No se reemplazo la sesion ${activeSession.id}: ${error instanceof Error ? error.message : error}`,
+      );
+      return false;
+    }
+
+    this.logger.log(`Sesion ${activeSession.id} cancelada: se escaneo otro QR (${code})`);
+    return true;
   }
 
   private async startMonthlySubscriptionSessionFromScan(
