@@ -16,6 +16,20 @@ export function normalizePlate(value: string): string {
   return value.toUpperCase().replace(/[\s-]+/g, '');
 }
 
+/**
+ * Placa 100% diferente: ningun caracter coincide en su misma posicion
+ * (SDE222 vs WSD412). Un error de digitacion (SDE222 vs SDE223) no cuenta.
+ */
+export function isCompletelyDifferentPlate(typed: string, registered: string): boolean {
+  const a = normalizePlate(typed);
+  const b = normalizePlate(registered);
+  if (!a || !b) return false;
+  for (let i = 0; i < Math.min(a.length, b.length); i += 1) {
+    if (a[i] === b[i]) return false;
+  }
+  return true;
+}
+
 export function resolvePlateVehicleKind(vehicleType: string | null | undefined): PlateVehicleKind | null {
   const upper = (vehicleType ?? '').toUpperCase();
   if (upper.includes('MOTO')) return 'MOTO';

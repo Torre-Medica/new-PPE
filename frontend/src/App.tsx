@@ -32,7 +32,7 @@ import {
 import type { BillingDocument } from './lib/billing-rules';
 import type { KbType } from './components/KeyboardModal';
 import { useLogoUnlock } from './hooks/useLogoUnlock';
-import { normalizePlate, PLATE_FORMAT_EXAMPLES, resolvePlateVehicleKind, validatePlate } from './lib/vehicle-plate';
+import { isCompletelyDifferentPlate, normalizePlate, PLATE_FORMAT_EXAMPLES, resolvePlateVehicleKind, validatePlate } from './lib/vehicle-plate';
 
 const SIMULATE = import.meta.env.VITE_SIMULATE === 'true';
 const {
@@ -141,6 +141,8 @@ const VALLE_ABURRA_CITY_INDEX = new Map(
 
 // Segundos para continuar solo con el pago si nadie toca "Continuar con el pago"
 const AUTO_CONTINUE_SECONDS = 6;
+// Tiempo en que se recuerda el primer intento con placa 100% diferente a la del QR
+const PLATE_RESCAN_WINDOW_MS = 5 * 60_000;
 
 const formatReviewCountdown = (seconds: number) => {
   if (seconds >= 60) {
@@ -2017,6 +2019,30 @@ export default function App() {
 
   // Al pulsar "Pagar" se pide la placa (visitantes); debe tener el formato del tipo de
   // vehiculo del ticket. Las mensualidades ya traen su placa validada.
+  // QR -> hora del primer intento con placa 100% diferente. Al reescanear el
+  // mismo QR dentro de la ventana, la segunda placa diferente si se acepta.
+  const plateMismatchRef = useRef(new Map<string, number>());
+
+  /** true si se debe pedir escanear de nuevo (primer intento con placa distinta). */
+  const requiresRescanForPlate = (typedPlate: string): boolean => {
+    const ticketPlate = paymentDetails.vehiclePlate;
+    const ticketKey = paymentDetails.identifierValue;
+    if (!ticketPlate || !ticketKey || !isCompletelyDifferentPlate(typedPlate, ticketPlate)) {
+      return false;
+    }
+    const now = Date.now();
+    const attempts = plateMismatchRef.current;
+    for (const [key, at] of attempts) {
+      if (now - at > PLATE_RESCAN_WINDOW_MS) attempts.delete(key);
+    }
+    if (attempts.has(ticketKey)) {
+      attempts.delete(ticketKey);
+      return false;
+    }
+    attempts.set(ticketKey, now);
+    return true;
+  };
+
   const openPlateEntry = () => {
     if (isMonthlyPayment) {
       void beginCollection();
@@ -2028,11 +2054,15 @@ export default function App() {
     const example = kind
       ? PLATE_FORMAT_EXAMPLES[kind]
       : `${PLATE_FORMAT_EXAMPLES.CARRO} o ${PLATE_FORMAT_EXAMPLES.MOTO}`;
+    const ticketPlate = normalizePlate(paymentDetails.vehiclePlate ?? '');
     setKeyboardModal({
       label: `Placa del ${vehicleLabel}`,
       title: 'Ingresa tu placa',
-      hint: `Escribe la placa tal como aparece en el ${vehicleLabel}.`,
-      placeholder: `Ej. ${example}`,
+      hint: ticketPlate
+        ? `Si tu placa es ${ticketPlate}, toca "Continuar al pago". Si no, escríbela tal como aparece en el ${vehicleLabel}.`
+        : `Escribe la placa tal como aparece en el ${vehicleLabel}.`,
+      // La placa del QR va de sugerencia: si continua sin escribir, se toma esa
+      placeholder: ticketPlate || `Ej. ${example}`,
       // Icono segun el tipo de vehiculo del ticket (la moto ya trae su propio circulo de fondo)
       imageSrc: kind === 'MOTO' ? '/placa-moto.png' : '/placa-carro.png',
       imageHalo: kind !== 'MOTO',
@@ -2044,17 +2074,23 @@ export default function App() {
         if (sessionId) void cancelKioskSession(sessionId).catch(() => undefined);
         setCancelNotice((prev) => prev ?? 'Sesion cancelada por inactividad. Regresando al inicio...');
       },
-      // Vacio a proposito: el cliente debe digitar la placa, no solo confirmarla
       initialValue: '',
       type: 'text',
       acceptLabel: 'Continuar al pago',
       uppercase: true,
-      validate: (value) => validatePlate(value, kind),
-      onAccept: (value) => {
+      validate: (value) => validatePlate(value || ticketPlate, kind),
+      onAccept: (typed) => {
+        const value = normalizePlate(typed) || ticketPlate;
         setKeyboardModal(null);
+        if (requiresRescanForPlate(value)) {
+          const sessionId = paymentDetails.paymentSessionId;
+          if (sessionId) void cancelKioskSession(sessionId).catch(() => undefined);
+          setCancelNotice('La placa no coincide con la del tiquete. Escanee de nuevo su QR.');
+          return;
+        }
         // Por ref: este cierre se crea en el mismo render en que se guarda el tercero
         // de la factura, y beginCollection debe ver ese estado ya actualizado
-        void beginCollectionRef.current(normalizePlate(value));
+        void beginCollectionRef.current(value);
       },
     });
   };
