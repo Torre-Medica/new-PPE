@@ -2089,10 +2089,8 @@ export default function App() {
     setKeyboardModal({
       label: `Placa del ${vehicleLabel}`,
       title: 'Ingresa tu placa',
-      hint: ticketPlate
-        ? `Si tu placa es ${ticketPlate}, toca "Continuar al pago". Si no, escríbela tal como aparece en el ${vehicleLabel}.`
-        : `Escribe la placa tal como aparece en el ${vehicleLabel}.`,
-      // La placa del QR va de sugerencia: si continua sin escribir, se toma esa
+      hint: `Escribe la placa tal como aparece en el ${vehicleLabel}.`,
+      // La placa del QR se ve de guia, pero hay que escribirla para continuar
       placeholder: ticketPlate || `Ej. ${example}`,
       // Icono segun el tipo de vehiculo del ticket (la moto ya trae su propio circulo de fondo)
       imageSrc: kind === 'MOTO' ? '/placa-moto.png' : '/placa-carro.png',
@@ -2109,9 +2107,10 @@ export default function App() {
       type: 'text',
       acceptLabel: 'Continuar al pago',
       uppercase: true,
-      validate: (value) => validatePlate(value || ticketPlate, kind),
+      // Debe escribirla aunque se vea en el campo: vacio no deja continuar
+      validate: (value) => validatePlate(value, kind),
       onAccept: (typed) => {
-        const value = normalizePlate(typed) || ticketPlate;
+        const value = normalizePlate(typed);
         setKeyboardModal(null);
         if (requiresRescanForPlate(value)) {
           const sessionId = paymentDetails.paymentSessionId;
