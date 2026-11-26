@@ -17,17 +17,19 @@ export function normalizePlate(value: string): string {
 }
 
 /**
- * Placa 100% diferente: ningun caracter coincide en su misma posicion
- * (SDE222 vs WSD412). Un error de digitacion (SDE222 vs SDE223) no cuenta.
+ * Placa distinta a la del tiquete: 2 o mas caracteres diferentes en su misma
+ * posicion (AWR234 vs AWT252). Un solo caracter distinto (SDE222 vs SDE223) se
+ * toma como error de digitacion. La diferencia de largo cuenta como distinta.
  */
-export function isCompletelyDifferentPlate(typed: string, registered: string): boolean {
+export function isDifferentPlate(typed: string, registered: string): boolean {
   const a = normalizePlate(typed);
   const b = normalizePlate(registered);
   if (!a || !b) return false;
+  let differences = Math.abs(a.length - b.length);
   for (let i = 0; i < Math.min(a.length, b.length); i += 1) {
-    if (a[i] === b[i]) return false;
+    if (a[i] !== b[i]) differences += 1;
   }
-  return true;
+  return differences >= 2;
 }
 
 export function resolvePlateVehicleKind(vehicleType: string | null | undefined): PlateVehicleKind | null {

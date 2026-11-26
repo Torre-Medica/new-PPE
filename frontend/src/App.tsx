@@ -32,7 +32,7 @@ import {
 import type { BillingDocument } from './lib/billing-rules';
 import type { KbType } from './components/KeyboardModal';
 import { useLogoUnlock } from './hooks/useLogoUnlock';
-import { isCompletelyDifferentPlate, normalizePlate, PLATE_FORMAT_EXAMPLES, resolvePlateVehicleKind, validatePlate } from './lib/vehicle-plate';
+import { isDifferentPlate, normalizePlate, PLATE_FORMAT_EXAMPLES, resolvePlateVehicleKind, validatePlate } from './lib/vehicle-plate';
 
 const SIMULATE = import.meta.env.VITE_SIMULATE === 'true';
 const {
@@ -141,7 +141,7 @@ const VALLE_ABURRA_CITY_INDEX = new Map(
 
 // Segundos para continuar solo con el pago si nadie toca "Continuar con el pago"
 const AUTO_CONTINUE_SECONDS = 6;
-// Tiempo en que se recuerda el primer intento con placa 100% diferente a la del QR
+// Tiempo en que se recuerda el primer intento con placa diferente a la del QR
 const PLATE_RESCAN_WINDOW_MS = 5 * 60_000;
 
 const formatReviewCountdown = (seconds: number) => {
@@ -2019,7 +2019,7 @@ export default function App() {
 
   // Al pulsar "Pagar" se pide la placa (visitantes); debe tener el formato del tipo de
   // vehiculo del ticket. Las mensualidades ya traen su placa validada.
-  // QR -> hora del primer intento con placa 100% diferente. Al reescanear el
+  // QR -> hora del primer intento con placa diferente. Al reescanear el
   // mismo QR dentro de la ventana, la segunda placa diferente si se acepta.
   const plateMismatchRef = useRef(new Map<string, number>());
 
@@ -2027,7 +2027,7 @@ export default function App() {
   const requiresRescanForPlate = (typedPlate: string): boolean => {
     const ticketPlate = paymentDetails.vehiclePlate;
     const ticketKey = paymentDetails.identifierValue;
-    if (!ticketPlate || !ticketKey || !isCompletelyDifferentPlate(typedPlate, ticketPlate)) {
+    if (!ticketPlate || !ticketKey || !isDifferentPlate(typedPlate, ticketPlate)) {
       return false;
     }
     const now = Date.now();
