@@ -18,6 +18,7 @@ import {
   resolvePlateVehicleKind,
 } from '@modules/payment-core/domain/vehicle-plate';
 import { PaymentSessionNotFoundError } from '@modules/payment-core/domain/errors/payment-session-not-found.error';
+import { looksLikeUnreadableDocument } from '@modules/payment-core/domain/unreadable-document';
 import {
   ACTIVE_SESSION_STATUSES,
   CASH_ACCEPTING_STATUSES,
@@ -1999,9 +2000,18 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
         // El frontend queda esperando en "Validando..." tras 'qr.processing' si no
         // recibe ninguna notificacion de vuelta. Reutilizamos 'qr.ignored' (mismo
         // listener que ya regresa la pantalla a idle) para mostrar el motivo real.
+        // Documento que el lector no interpreta (ej. QR de la cedula nueva): el
+        // kiosko abre la vista para digitar la cedula en vez de solo rechazar.
+        const requestIdentification =
+          event.source === 'QR_SCANNER' &&
+          evaluation.eventType !== 'payment.qr.already-paid' &&
+          looksLikeUnreadableDocument(event.qrCode);
         this.kioskEventsService.emit('qr.ignored', {
           qrCode: event.qrCode,
-          reason: evaluation.reason,
+          reason: requestIdentification
+            ? 'No pudimos leer tu documento. Ingresa tu número de cédula'
+            : evaluation.reason,
+          ...(requestIdentification ? { requestIdentification: true } : {}),
           ...(evaluation.grace ? { grace: evaluation.grace } : {}),
         });
         return;
@@ -2132,6 +2142,17 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
 
     this.logger.log(`Sesion ${activeSession.id} cancelada: se escaneo otro QR (${code})`);
     return true;
+  }
+
+  /** Cedula digitada en el kiosko: sigue el mismo flujo que una cedula leida. */
+  async submitManualIdentification(identificationNumber: string): Promise<void> {
+    await this.handleQrScannedEvent({
+      source: 'MANUAL_ENTRY',
+      qrCode: identificationNumber.trim(),
+      rawCode: identificationNumber.trim(),
+      port: null,
+      scannedAt: new Date().toISOString(),
+    });
   }
 
   private async startMonthlySubscriptionSessionFromScan(

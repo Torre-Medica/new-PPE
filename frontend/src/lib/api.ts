@@ -231,6 +231,19 @@ export async function updateElectronicBillingCustomerEmail(
   return response.json() as Promise<ElectronicBillingCustomerSearch>;
 }
 
+/** Cedula digitada cuando el lector no pudo interpretar el documento (cedula nueva). */
+export async function submitManualIdentification(identificationNumber: string) {
+  const response = await fetch(`${API_PREFIX}/kiosk/manual-identification`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identificationNumber }),
+  });
+
+  if (!response.ok) {
+    throw new Error('No fue posible consultar la cedula');
+  }
+}
+
 export async function cancelKioskSession(paymentSessionId: string) {
   const response = await fetch(`${API_PREFIX}/kiosk/payment-sessions/${paymentSessionId}/cancel`, {
     method: 'POST',

@@ -1032,6 +1032,45 @@ describe('PaymentSessionService', () => {
     });
   });
 
+  describe('cedula nueva que el lector no interpreta', () => {
+    it('al rechazar una lectura desconocida pide digitar la cedula', async () => {
+      const ctx = createService();
+      let qrHandler: ((event: Record<string, unknown>) => void) | undefined;
+      ctx.peripheralsService.onQrScanned.mockImplementation((handler: typeof qrHandler) => {
+        qrHandler = handler;
+      });
+      ctx.paymentSessionRepository.findOne.mockResolvedValue(null);
+      ctx.paymentSessionRepository.save.mockImplementation(async (value) => ({ id: 's-doc', ...value }));
+      ctx.serverLinkService.validatePaymentCandidate.mockResolvedValue({ status: 'NOT_FOUND' });
+      ctx.service.onApplicationBootstrap();
+      const code = 'AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAh+/=';
+      qrHandler?.({ source: 'QR_SCANNER', qrCode: code, rawCode: code, port: 'COM4', scannedAt: '2026-11-26T15:00:00.000Z' });
+      for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+
+      expect(ctx.kioskEventsService.emit).toHaveBeenCalledWith(
+        'qr.ignored',
+        expect.objectContaining({ qrCode: code, requestIdentification: true }),
+      );
+    });
+
+    it('la cedula digitada se valida con el servidor como una lectura normal', async () => {
+      const ctx = createService();
+      ctx.paymentSessionRepository.findOne.mockResolvedValue(null);
+      ctx.paymentSessionRepository.save.mockImplementation(async (value) => ({ id: 's-doc', ...value }));
+      ctx.serverLinkService.validatePaymentCandidate.mockResolvedValue({ status: 'NOT_FOUND' });
+      await ctx.service.submitManualIdentification('7770000005');
+
+      expect(ctx.serverLinkService.validatePaymentCandidate).toHaveBeenCalledWith(
+        expect.objectContaining({ qrCode: '7770000005' }),
+      );
+      // Si tampoco existe, se muestra el rechazo normal (no vuelve a pedir la cedula)
+      expect(ctx.kioskEventsService.emit).not.toHaveBeenCalledWith(
+        'qr.ignored',
+        expect.objectContaining({ requestIdentification: true }),
+      );
+    });
+  });
+
   it('retries a pending server commit without dispensing change again', async () => {
     const {
       service,

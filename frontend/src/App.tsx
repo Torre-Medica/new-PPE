@@ -38,6 +38,7 @@ const SIMULATE = import.meta.env.VITE_SIMULATE === 'true';
 const {
   activateKioskCollection,
   cancelKioskSession,
+  submitManualIdentification,
   createElectronicBillingCustomer,
   updateElectronicBillingCustomer,
   checkElectronicBillingEmail,
@@ -613,6 +614,36 @@ export default function App() {
             graceMinutes: grace.graceMinutes,
             vehiclePlate: typeof grace.vehiclePlate === 'string' ? grace.vehiclePlate : null,
             vehicleType: grace.vehicleType === 'MOTO' || grace.vehicleType === 'CARRO' ? grace.vehicleType : null,
+          });
+        }
+        // Documento que el lector no interpreta (cedula nueva): vista de pantalla
+        // completa, igual a "Ingresa tu placa", para digitar el numero de cedula.
+        if (payload?.requestIdentification === true) {
+          setKeyboardModal({
+            label: 'Número de cédula',
+            title: 'Ingresa tu cédula',
+            hint: 'No pudimos leer tu documento. Escribe el número sin puntos ni espacios.',
+            placeholder: 'Ej. 1012345678',
+            imageSrc: '/cedula.png',
+            imageHalo: true,
+            fullscreen: true,
+            idleTimeoutSeconds: 30,
+            onIdleTimeout: () => setKeyboardModal(null),
+            initialValue: '',
+            // 'text': el teclado numerico pequeño no tiene vista de pantalla completa
+            type: 'text',
+            acceptLabel: 'Continuar',
+            validate: (value) =>
+              /^\d{6,10}$/.test(value.trim()) ? null : 'La cédula debe tener entre 6 y 10 dígitos',
+            onAccept: (value) => {
+              setKeyboardModal(null);
+              setPaymentStage('scanning');
+              setStatusMessage('Consultando la cédula...');
+              void submitManualIdentification(value.trim()).catch(() => {
+                setPaymentStage('idle');
+                setStatusMessage('No fue posible consultar la cédula. Intente de nuevo.');
+              });
+            },
           });
         }
         // Con la pantalla de gracia no se muestra el aviso de texto (la vista ya lo explica)

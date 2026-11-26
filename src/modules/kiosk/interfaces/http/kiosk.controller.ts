@@ -5,6 +5,7 @@ import { Observable } from 'rxjs';
 import { Public } from '@common/security/public.decorator';
 import { KioskEventsService } from '@modules/kiosk/application/kiosk-events.service';
 import { KioskStateService } from '@modules/kiosk/application/kiosk-state.service';
+import { ManualIdentificationDto } from '@modules/kiosk/application/dto/manual-identification.dto';
 import { SimulateQrScanDto } from '@modules/kiosk/application/dto/simulate-qr-scan.dto';
 import { UpdateKioskModeDto } from '@modules/kiosk/application/dto/update-kiosk-mode.dto';
 import { ActivatePaymentCollectionDto } from '@modules/payment-core/application/dto/activate-payment-collection.dto';
@@ -110,6 +111,14 @@ export class KioskController {
   }
 
   // Pruebas sin lector fisico: simula la lectura de un QR (solo con SIMULATE_HARDWARE=true)
+  /** Cedula digitada cuando el lector no pudo interpretar el documento (cedula nueva). */
+  @Public()
+  @Post('manual-identification')
+  async submitManualIdentification(@Body() dto: ManualIdentificationDto) {
+    await this.paymentSessionService.submitManualIdentification(dto.identificationNumber);
+    return { accepted: true };
+  }
+
   @Public()
   @Post('sim/qr')
   simulateQrScan(@Body() dto: SimulateQrScanDto) {
