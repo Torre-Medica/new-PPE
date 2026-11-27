@@ -6,7 +6,8 @@ import { useCompactScreen } from '../lib/useCompactScreen';
 // Cuenta regresiva en vivo hasta graceUntil; ilustracion de carro o moto segun el QR.
 
 export interface GraceInfo {
-  graceUntil: string;
+  // null: no debe nada y no hay ventana de gracia que contar
+  graceUntil: string | null;
   graceMinutes: number;
   vehiclePlate: string | null;
   vehicleType: 'CARRO' | 'MOTO' | null;
@@ -24,7 +25,7 @@ export const GRACE_SCREEN_SECONDS = 10;
 
 export function GraceScreen({ info }: { info: GraceInfo }) {
   useCompactScreen();
-  const until = new Date(info.graceUntil).getTime();
+  const until = info.graceUntil ? new Date(info.graceUntil).getTime() : null;
   const [now, setNow] = useState(() => Date.now());
   const [shownAt] = useState(() => Date.now());
   const closesIn = Math.max(0, GRACE_SCREEN_SECONDS - Math.floor((now - shownAt) / 1000));
@@ -34,11 +35,18 @@ export function GraceScreen({ info }: { info: GraceInfo }) {
     return () => window.clearInterval(timer);
   }, []);
 
-  const remainingMs = Math.max(0, until - now);
+  const remainingMs = until === null ? 0 : Math.max(0, until - now);
   const totalMs = info.graceMinutes * 60_000;
+  // Sin saldo pendiente: no hay ventana, o la ventana es mucho mas larga que la gracia
+  // (ej. privado con vigencia hasta fin de mes): no se muestra un contador sin sentido.
+  const noBalance = until === null || totalMs <= 0 || until - shownAt > totalMs + 60_000;
   const progress = totalMs > 0 ? Math.min(100, (remainingMs / totalMs) * 100) : 0;
-  const expired = remainingMs <= 0;
+  const expired = !noBalance && remainingMs <= 0;
   const isMoto = info.vehicleType === 'MOTO';
+
+  if (noBalance) {
+    return <NoBalanceScreen info={info} closesIn={closesIn} isMoto={isMoto} />;
+  }
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-[#f3f6fb]">
@@ -181,5 +189,70 @@ function ExitIllustration({ moto }: { moto: boolean }) {
       className="my-6 w-full max-w-md select-none object-contain"
       draggable={false}
     />
+  );
+}
+
+// Cedula o QR sin nada que pagar y sin tiempo de gracia que contar: puede salir.
+function NoBalanceScreen({ info, closesIn, isMoto }: { info: GraceInfo; closesIn: number; isMoto: boolean }) {
+  return (
+    <div className="fixed inset-0 z-40 flex flex-col bg-[#f3f6fb]">
+      <header className="flex items-center gap-8 border-b border-slate-200 bg-white/70 px-10 py-6">
+        <img src="/LogoCoins.png" alt="Coins" className="h-14 w-auto shrink-0 object-contain" />
+        <div className="h-14 w-px bg-slate-300" aria-hidden />
+        <div>
+          <h1 className="text-4xl font-extrabold tracking-tight text-[#0b2a5b]">Salida del parqueadero</h1>
+          <p className="mt-1 text-2xl text-slate-500">Sin saldo pendiente</p>
+        </div>
+        <div className="ml-auto rounded-full bg-white/80 px-4 py-1.5 text-sm font-medium text-muted shadow-sm">
+          Volverá al inicio en: {closesIn} s
+        </div>
+      </header>
+
+      <div className="mx-auto grid min-h-0 w-full max-w-[1700px] flex-1 gap-8 px-10 py-8 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+        <section className="flex min-h-0 flex-col justify-between gap-6 rounded-3xl bg-white p-10 shadow-sm">
+          <div className="flex items-center gap-8">
+            <span className="flex h-32 w-32 shrink-0 items-center justify-center rounded-full bg-[#fc6400]" aria-hidden>
+              <svg className="h-16 w-16 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m5 12 5 5L20 7" />
+              </svg>
+            </span>
+            <div>
+              <h2 className="text-5xl font-extrabold tracking-tight text-[#0b2a5b]">¡No tienes saldo pendiente!</h2>
+              <p className="mt-3 text-2xl leading-snug text-slate-500">
+                No tienes nada que pagar. Puedes salir del parqueadero.
+              </p>
+            </div>
+          </div>
+
+          {info.vehiclePlate && (
+            <div className="flex items-center gap-6 rounded-2xl bg-[#f3f6fb] p-8">
+              <VehicleIcon moto={isMoto} />
+              <div>
+                <p className="text-xl text-slate-500">Placa</p>
+                <p className="text-5xl font-extrabold tracking-wide text-[#0b2a5b]">{info.vehiclePlate}</p>
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center gap-6 rounded-2xl bg-[#fff1e6] p-7">
+            <span className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-[#fc6400]" aria-hidden>
+              <svg className="h-9 w-9 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m5 12 5 5L20 7" />
+              </svg>
+            </span>
+            <p className="text-2xl font-bold text-[#e65c00]">Gracias por tu visita</p>
+          </div>
+        </section>
+
+        <section className="flex flex-col items-center justify-between rounded-3xl border border-slate-200 bg-gradient-to-b from-[#eef2f8] to-[#e5ebf4] p-10 text-center">
+          <img src="/LogoCoins.png" alt="Coins" className="h-16 w-auto object-contain" />
+          <ExitIllustration moto={isMoto} />
+          <div>
+            <p className="text-4xl font-extrabold leading-tight text-[#0b2a5b]">Puedes continuar con tu salida</p>
+            <p className="mt-3 text-xl text-slate-500">No tienes saldo pendiente.</p>
+          </div>
+        </section>
+      </div>
+    </div>
   );
 }

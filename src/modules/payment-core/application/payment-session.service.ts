@@ -89,7 +89,8 @@ type MonthlyIdentification = {
 
 // Datos de la pantalla "Tiempo de gracia" del kiosko
 export interface QrGraceInfo {
-  graceUntil: string;
+  // null: no debe nada y no hay ventana que contar (pantalla "No tienes saldo pendiente")
+  graceUntil: string | null;
   graceMinutes: number;
   vehiclePlate: string | null;
   vehicleType: 'CARRO' | 'MOTO' | null;
@@ -561,10 +562,6 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       this.logger.warn(`[PLACA] No se pudo enviar la placa ${vehiclePlate} a nexo_back: ${reason}`);
       await this.appendEvent(session.id, 'payment.plate.sync-failed', null, { vehiclePlate, reason });
     }
-  }
-
-  private allowsZeroAmountForTesting(): boolean {
-    return this.configService.get<boolean>('peripherals.simulateHardware', false) === true;
   }
 
   /**
@@ -2329,6 +2326,18 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
     };
   }
 
+  /** Sin cobro y sin ventana de gracia vigente: se muestra "No tienes saldo pendiente". */
+  private noBalanceInfo(response: Record<string, unknown>): QrGraceInfo {
+    const plate = typeof response.vehiclePlate === 'string' ? response.vehiclePlate.trim() : '';
+    const kind = typeof response.vehicleType === 'string' ? response.vehicleType.toUpperCase() : '';
+    return {
+      graceUntil: null,
+      graceMinutes: 0,
+      vehiclePlate: plate || null,
+      vehicleType: kind === 'MOTO' ? 'MOTO' : kind === 'CARRO' ? 'CARRO' : null,
+    };
+  }
+
   private evaluateQrValidationResponse(response: unknown): {
     accepted: boolean;
     eventType: string;
@@ -2389,7 +2398,7 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
         accepted: false,
         eventType: 'payment.qr.already-paid',
         reason: friendlyReason,
-        grace,
+        grace: grace ?? this.noBalanceInfo(responseRecord),
         amountDue: 0,
         serverProcessId: null,
         vehiclePlate: null,
@@ -2495,9 +2504,9 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
       };
     }
 
-    // Solo en pruebas (SIMULATE_HARDWARE=true) un ticket en $0 sigue a la revision,
-    // para poder probar las pantallas aunque la tarifa local este en cero.
-    if (amountDue <= 0 && !this.allowsZeroAmountForTesting()) {
+    // $0 sin ventana de gracia (ej. cedula de privado o mensualidad que no debe nada):
+    // pantalla "No tienes saldo pendiente", igual en simulacion que con el hardware real.
+    if (amountDue <= 0) {
       // Llegar aqui significa que nexo_back encontro un proceso valido
       // (accepted: true / explicitPayable) pero no hay monto pendiente. El
       // endpoint real de nexo_back (ppe.gateway.ts) nunca manda messageTitle,
@@ -2508,7 +2517,7 @@ export class PaymentSessionService implements OnApplicationBootstrap, OnModuleDe
         accepted: false,
         eventType: 'payment.qr.already-paid',
         reason: 'No requiere pago en este momento (ya pagado o en tiempo de gracia)',
-        grace,
+        grace: grace ?? this.noBalanceInfo(responseRecord),
         amountDue: 0,
         serverProcessId: null,
         vehiclePlate: null,

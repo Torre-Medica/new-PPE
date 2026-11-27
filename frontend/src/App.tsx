@@ -607,7 +607,12 @@ export default function App() {
         resetMonthlyFlow();
         // Sin cobro y aun en gracia: se muestra la pantalla de tiempo de gracia
         const grace = payload?.grace as Partial<GraceInfo> | undefined;
-        if (grace && typeof grace.graceUntil === 'string' && typeof grace.graceMinutes === 'number') {
+        // graceUntil null: no debe nada y no hay gracia que contar ("No tienes saldo pendiente")
+        if (
+          grace &&
+          (typeof grace.graceUntil === 'string' || grace.graceUntil === null) &&
+          typeof grace.graceMinutes === 'number'
+        ) {
           setGraceShowId((current) => current + 1);
           setGraceInfo({
             graceUntil: grace.graceUntil,
