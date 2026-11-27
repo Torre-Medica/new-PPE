@@ -2085,13 +2085,11 @@ export default function App() {
     const example = kind
       ? PLATE_FORMAT_EXAMPLES[kind]
       : `${PLATE_FORMAT_EXAMPLES.CARRO} o ${PLATE_FORMAT_EXAMPLES.MOTO}`;
-    const ticketPlate = normalizePlate(paymentDetails.vehiclePlate ?? '');
     setKeyboardModal({
       label: `Placa del ${vehicleLabel}`,
       title: 'Ingresa tu placa',
       hint: `Escribe la placa tal como aparece en el ${vehicleLabel}.`,
-      // La placa del QR se ve de guia, pero hay que escribirla para continuar
-      placeholder: ticketPlate || `Ej. ${example}`,
+      placeholder: `Ej. ${example}`,
       // Icono segun el tipo de vehiculo del ticket (la moto ya trae su propio circulo de fondo)
       imageSrc: kind === 'MOTO' ? '/placa-moto.png' : '/placa-carro.png',
       imageHalo: kind !== 'MOTO',
@@ -2937,7 +2935,6 @@ export default function App() {
                           vehicleType={paymentDetails.vehicleType ?? null}
                           enteredAt={paymentDetails.enteredAt}
                         />
-                        <ReviewInfo icon={<CoinsIcon />} label="Monto a pagar" value={`$ ${currency.format(paymentDetails.amountDue)}`} big />
                       </div>
                     )}
                     {showPaymentIdentifier && !isMonthlyPayment && (
